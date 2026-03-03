@@ -22,7 +22,15 @@ impl<T: Target> Scenario for RawBytesScenario<T> {
     fn new(_args: &[String]) -> Result<Self, String> {
         let config = T::Config::default();
         let target = T::start(config).map_err(|e| e.to_string())?;
-        let conn = connect_to_target(&target, Duration::from_secs(5)).map_err(|e| e.to_string())?;
+        let mut conn =
+            connect_to_target(&target, Duration::from_secs(5)).map_err(|e| e.to_string())?;
+
+        // Warm up the target's message handling path before the Nyx snapshot.
+        // For JVM-based targets (i.e. Eclair), this  causes the necessary
+        // classes to load and be JIT compiled before we take the snapshot,
+        // speeding up every subsequent iteration.
+        ping_pong(&mut conn).map_err(|e| e.to_string())?;
+
         Ok(Self { target, conn })
     }
 
