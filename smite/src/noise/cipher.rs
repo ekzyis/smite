@@ -69,17 +69,11 @@ impl NoiseCipher {
     /// Panics if `plaintext` exceeds `MAX_MESSAGE_SIZE` bytes.
     #[must_use]
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Vec<u8> {
-        // Check for key rotation before encrypting
-        self.maybe_rotate_send_key();
-
         // Encrypt the 2-byte length prefix
-        let len_bytes = u16::try_from(plaintext.len())
-            .expect("message within MAX_MESSAGE_SIZE bytes")
-            .to_be_bytes();
-        let encrypted_len = encrypt_with_ad(&self.send_key, self.send_nonce, &[], &len_bytes);
-        self.send_nonce += 1;
+        let length = u16::try_from(plaintext.len()).expect("message within MAX_MESSAGE_SIZE bytes");
+        let encrypted_len = self.encrypt_length(length);
 
-        // Check again after length encryption
+        // Check for key rotation before encrypting body
         self.maybe_rotate_send_key();
 
         // Encrypt the message body
@@ -91,6 +85,19 @@ impl NoiseCipher {
         result.extend_from_slice(&encrypted_len);
         result.extend_from_slice(&encrypted_msg);
         result
+    }
+
+    /// Encrypts just the 2-byte length prefix for sending.
+    ///
+    /// This advances the send nonce by one (for the length encryption).
+    /// Useful when the message body will be sent separately (e.g., during fuzzing).
+    #[must_use]
+    pub fn encrypt_length(&mut self, length: u16) -> Vec<u8> {
+        self.maybe_rotate_send_key();
+        let len_bytes = length.to_be_bytes();
+        let encrypted = encrypt_with_ad(&self.send_key, self.send_nonce, &[], &len_bytes);
+        self.send_nonce += 1;
+        encrypted
     }
 
     /// Decrypts the length prefix from an incoming packet.
