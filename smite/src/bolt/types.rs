@@ -9,6 +9,9 @@ pub const MAX_MESSAGE_SIZE: usize = 65535;
 /// Size of a channel ID in bytes.
 pub const CHANNEL_ID_SIZE: usize = 32;
 
+/// Size of a chain hash (SHA256).
+pub const CHAIN_HASH_SIZE: usize = 32;
+
 /// A 32-byte channel identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ChannelId(pub [u8; CHANNEL_ID_SIZE]);

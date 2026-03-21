@@ -2,16 +2,13 @@
 
 use super::BoltError;
 use super::tlv::TlvStream;
-use super::types::{read_var_bytes, write_var_bytes};
+use super::types::{CHAIN_HASH_SIZE, read_var_bytes, write_var_bytes};
 
 /// TLV type for chain hash list.
 const TLV_NETWORKS: u64 = 1;
 
 /// TLV type for remote address.
 const TLV_REMOTE_ADDR: u64 = 3;
-
-/// Size of a chain hash (SHA256).
-const CHAIN_HASH_SIZE: usize = 32;
 
 /// BOLT 1 init message (type 16).
 ///
