@@ -18,17 +18,21 @@ Smite is a coverage-guided fuzzing framework for Lightning Network implementatio
 
 ## Quick Start
 
-Choose a target (`lnd`, `ldk`, `cln`, or `eclair`) and a scenario (`encrypted_bytes` or `noise`) and follow the steps below:
+Choose a target (`lnd`, `ldk`, `cln`, or `eclair`) and a scenario (`encrypted_bytes`, `noise`, or `init`) and follow the steps below:
 
 ```bash
+# Choose target and scenario
+TARGET=lnd
+SCENARIO=encrypted_bytes
+
 # Build the Docker image
-docker build -t smite-<target>-<scenario> -f workloads/<target>/Dockerfile --build-arg SCENARIO=<scenario> .
+docker build -t smite-$TARGET-$SCENARIO -f workloads/$TARGET/Dockerfile --build-arg SCENARIO=$SCENARIO .
 
 # Enable the KVM VMware backdoor (required for Nyx)
 ./scripts/enable-vmware-backdoor.sh
 
 # Create the Nyx sharedir
-./scripts/setup-nyx.sh /tmp/smite-nyx smite-<target>-<scenario> ~/AFLplusplus
+./scripts/setup-nyx.sh /tmp/smite-nyx smite-$TARGET-$SCENARIO ~/AFLplusplus
 
 # Create seed corpus
 mkdir -p /tmp/smite-seeds
@@ -64,7 +68,7 @@ When AFL++ finds a crash:
 cp /tmp/smite-out/default/crashes/<crashing-input> ./crash
 
 # Reproduce in local mode (use the matching image and scenario binary)
-docker run --rm -v $PWD/crash:/input.bin -e SMITE_INPUT=/input.bin smite-<target>-<scenario> /<target>-scenario
+docker run --rm -v $PWD/crash:/input.bin -e SMITE_INPUT=/input.bin smite-$TARGET-$SCENARIO /$TARGET-scenario
 ```
 
 ### Coverage Report Mode
@@ -72,11 +76,11 @@ docker run --rm -v $PWD/crash:/input.bin -e SMITE_INPUT=/input.bin smite-<target
 Generate an HTML coverage report showing which parts of the target were exercised by a fuzzing corpus:
 
 ```bash
-# Generate coverage report (target: lnd/cln/ldk/eclair, scenario: encrypted_bytes/noise)
-./scripts/coverage-report.sh <target> <scenario> /tmp/smite-out/default/queue/
+# Generate coverage report
+./scripts/coverage-report.sh $TARGET $SCENARIO /tmp/smite-out/default/queue/
 
 # View the report
-firefox ./<target>-<scenario>-coverage-report/html/index.html
+firefox ./$TARGET-$SCENARIO-coverage-report/html/index.html
 ```
 
 ## Project Structure
