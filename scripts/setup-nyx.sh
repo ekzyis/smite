@@ -2,29 +2,29 @@
 #
 # Setup script for Nyx mode fuzzing with AFL++
 #
-# Usage: ./scripts/setup-nyx.sh <sharedir> <docker-image> <aflplusplus-path>
+# Usage: ./scripts/setup-nyx.sh <sharedir> <docker-image> <aflplusplus-store-path>
 #
 # Example:
-#   ./scripts/setup-nyx.sh /tmp/smite-lnd-nyx smite-lnd ~/AFLplusplus
+#   ./scripts/setup-nyx.sh /tmp/smite-lnd-nyx smite-lnd /nix/store/...
 #
 # Creates the necessary files in sharedir for snapshot fuzzing using
 # docker-image.  Requires that docker-image is already built and that AFL++ has
-# been built from source (including Nyx mode) at aflplusplus-path.
+# been built with Nyx mode at aflplusplus-store-path.
 
 set -eu
 
 if [ $# -ne 3 ]; then
-    echo "Usage: $0 <sharedir> <docker-image> <aflplusplus-path>"
+    echo "Usage: $0 <sharedir> <docker-image> <aflplusplus-store-path>"
     exit 1
 fi
 
 SHAREDIR="$1"
 DOCKER_IMAGE="$2"
-AFLPP_PATH="$3"
+AFLPP_STORE_PATH="$3"
 
 # Validate AFL++ path
-if [ ! -d "$AFLPP_PATH/nyx_mode/packer/packer" ]; then
-    echo "Error: AFL++ not found at $AFLPP_PATH"
+if [ ! -d "$AFLPP_STORE_PATH/nyx_mode/packer/packer" ]; then
+    echo "Error: AFL++ not found at $AFLPP_STORE_PATH"
     echo "Make sure AFL++ is installed with Nyx mode support."
     echo "See: https://github.com/AFLplusplus/AFLplusplus/blob/stable/nyx_mode/README.md"
     exit 1
@@ -37,7 +37,7 @@ if ! docker image inspect "$DOCKER_IMAGE" > /dev/null 2>&1; then
     exit 1
 fi
 
-PACKER_PATH="$AFLPP_PATH/nyx_mode/packer/packer"
+PACKER_PATH="$AFLPP_STORE_PATH/nyx_mode/packer/packer"
 BINARIES_PATH="$PACKER_PATH/linux_x86_64-userspace/bin64"
 
 # Check if packer binaries exist, compile if needed
@@ -62,7 +62,8 @@ cp "$BINARIES_PATH"/* "$SHAREDIR/"
 
 # Generate Nyx config
 echo "Generating Nyx config..."
-(cd "$PACKER_PATH" && python3 nyx_config_gen.py "$SHAREDIR" Kernel -m 4096)
+rm $HOME/.nyx/fuzzer_configs/*
+"$AFLPP_STORE_PATH"/bin/packer/nyx_config_gen "$SHAREDIR" Kernel -m 4096
 
 # Create fuzz_no_pt.sh script
 echo "Creating fuzz_no_pt.sh..."
@@ -103,4 +104,4 @@ ls -lh "$SHAREDIR"
 echo ""
 echo "To start fuzzing, run:"
 echo "  mkdir -p /tmp/smite-seeds && echo 'AAAA' > /tmp/smite-seeds/seed1"
-echo "  $AFLPP_PATH/afl-fuzz -X -i /tmp/smite-seeds -o /tmp/smite-out -- $SHAREDIR"
+echo "  $AFLPP_STORE_PATH/bin/afl-fuzz -X -i /tmp/smite-seeds -o /tmp/smite-out -- $SHAREDIR"
