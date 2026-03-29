@@ -5,6 +5,7 @@
 
 mod accept_channel;
 mod error;
+mod funding_created;
 mod gossip_timestamp_filter;
 mod init;
 mod open_channel;
@@ -18,6 +19,7 @@ mod wire;
 
 pub use accept_channel::{AcceptChannel, AcceptChannelTlvs};
 pub use error::Error;
+pub use funding_created::FundingCreated;
 pub use gossip_timestamp_filter::GossipTimestampFilter;
 pub use init::{Init, InitTlvs};
 pub use open_channel::{OpenChannel, OpenChannelTlvs};
@@ -100,6 +102,8 @@ pub mod msg_type {
     pub const OPEN_CHANNEL: u16 = 32;
     /// `accept_channel` message (BOLT 2).
     pub const ACCEPT_CHANNEL: u16 = 33;
+    /// `funding_created` message (BOLT 2).
+    pub const FUNDING_CREATED: u16 = 34;
     /// Shutdown message (BOLT 2).
     pub const SHUTDOWN: u16 = 38;
     /// Gossip timestamp filter message (BOLT 7).
@@ -124,6 +128,8 @@ pub enum Message {
     OpenChannel(OpenChannel),
     /// `accept_channel` message (type 33).
     AcceptChannel(AcceptChannel),
+    /// `funding_created` message (type 34).
+    FundingCreated(FundingCreated),
     /// Shutdown message (type 38).
     Shutdown(Shutdown),
     /// Gossip timestamp filter message (type 265).
@@ -152,6 +158,7 @@ impl Message {
             Self::Pong(_) => msg_type::PONG,
             Self::OpenChannel(_) => msg_type::OPEN_CHANNEL,
             Self::AcceptChannel(_) => msg_type::ACCEPT_CHANNEL,
+            Self::FundingCreated(_) => msg_type::FUNDING_CREATED,
             Self::Shutdown(_) => msg_type::SHUTDOWN,
             Self::GossipTimestampFilter(_) => msg_type::GOSSIP_TIMESTAMP_FILTER,
             Self::Unknown { msg_type, .. } => *msg_type,
@@ -171,6 +178,7 @@ impl Message {
             Self::Pong(m) => out.extend(m.encode()),
             Self::OpenChannel(m) => out.extend(m.encode()),
             Self::AcceptChannel(m) => out.extend(m.encode()),
+            Self::FundingCreated(m) => out.extend(m.encode()),
             Self::Shutdown(m) => out.extend(m.encode()),
             Self::GossipTimestampFilter(m) => out.extend(m.encode()),
             Self::Unknown { payload, .. } => out.extend(payload),
@@ -197,6 +205,7 @@ impl Message {
             msg_type::PONG => Ok(Self::Pong(Pong::decode(cursor)?)),
             msg_type::OPEN_CHANNEL => Ok(Self::OpenChannel(OpenChannel::decode(cursor)?)),
             msg_type::ACCEPT_CHANNEL => Ok(Self::AcceptChannel(AcceptChannel::decode(cursor)?)),
+            msg_type::FUNDING_CREATED => Ok(Self::FundingCreated(FundingCreated::decode(cursor)?)),
             msg_type::SHUTDOWN => Ok(Self::Shutdown(Shutdown::decode(cursor)?)),
             msg_type::GOSSIP_TIMESTAMP_FILTER => Ok(Self::GossipTimestampFilter(
                 GossipTimestampFilter::decode(cursor)?,
@@ -231,6 +240,7 @@ pub fn message_with_type(msg_type: u16, payload: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secp256k1::hashes::Hash;
     use secp256k1::{PublicKey, Secp256k1, SecretKey};
     use types::CHAIN_HASH_SIZE;
 
@@ -353,6 +363,30 @@ mod tests {
         assert_eq!(decoded, Message::AcceptChannel(accept));
     }
 
+    /// Valid `FundingCreated` message for testing.
+    fn sample_funding_created() -> FundingCreated {
+        let secp = Secp256k1::new();
+        let sk = SecretKey::from_byte_array([0x11; 32]).expect("valid secret");
+        let msg = secp256k1::Message::from_digest([0xaa; 32]);
+        let sig = secp.sign_ecdsa(msg, &sk);
+
+        FundingCreated {
+            temporary_channel_id: ChannelId::new([0xbb; CHANNEL_ID_SIZE]),
+            funding_txid: Txid::from_byte_array([0xcc; TXID_SIZE]),
+            funding_output_index: 0,
+            signature: sig,
+        }
+    }
+
+    #[test]
+    fn message_funding_created_roundtrip() {
+        let fc = sample_funding_created();
+        let msg = Message::FundingCreated(fc.clone());
+        let encoded = msg.encode();
+        let decoded = Message::decode(&encoded).unwrap();
+        assert_eq!(decoded, Message::FundingCreated(fc));
+    }
+
     #[test]
     fn message_gossip_timestamp_filter_roundtrip() {
         let chain_hash = [0x6f; 32];
@@ -403,6 +437,10 @@ mod tests {
         assert_eq!(
             Message::AcceptChannel(sample_accept_channel()).msg_type(),
             msg_type::ACCEPT_CHANNEL
+        );
+        assert_eq!(
+            Message::FundingCreated(sample_funding_created()).msg_type(),
+            msg_type::FUNDING_CREATED
         );
         assert_eq!(
             Message::Shutdown(Shutdown::for_channel(ChannelId([0; 32]), vec![])).msg_type(),
