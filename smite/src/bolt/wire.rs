@@ -1,8 +1,9 @@
 //! Wire format serialization and deserialization primitives.
 
 use crate::bolt::BoltError;
-use crate::bolt::types::{BigSize, CHANNEL_ID_SIZE, ChannelId};
+use crate::bolt::types::{BigSize, CHANNEL_ID_SIZE, ChannelId, TXID_SIZE, Txid};
 use secp256k1::PublicKey;
+use secp256k1::hashes::Hash;
 
 /// A type that can be read from and written to the Lightning wire format.
 pub trait WireFormat: Sized {
@@ -166,6 +167,17 @@ impl WireFormat for Vec<u8> {
     fn write(&self, out: &mut Vec<u8>) {
         (self.len() as u16).write(out);
         out.extend_from_slice(self);
+    }
+}
+
+impl WireFormat for Txid {
+    fn read(data: &mut &[u8]) -> Result<Self, BoltError> {
+        let buf: [u8; TXID_SIZE] = WireFormat::read(data)?;
+        Ok(Txid::from_byte_array(buf))
+    }
+
+    fn write(&self, out: &mut Vec<u8>) {
+        self.to_byte_array().write(out);
     }
 }
 
@@ -680,5 +692,39 @@ mod tests {
         let bs = BigSize::read(&mut data).unwrap();
         assert_eq!(bs, BigSize::new(253));
         assert_eq!(data, &[0xaa]);
+    }
+
+    #[test]
+    fn txid_read_truncated() {
+        let mut empty: &[u8] = &[];
+        assert_eq!(
+            Txid::read(&mut empty),
+            Err(BoltError::Truncated {
+                expected: TXID_SIZE,
+                actual: 0
+            })
+        );
+
+        let mut short: &[u8] = &[0xaa; 20];
+        assert_eq!(
+            Txid::read(&mut short),
+            Err(BoltError::Truncated {
+                expected: TXID_SIZE,
+                actual: 20
+            })
+        );
+    }
+
+    #[test]
+    fn txid_write_roundtrip() {
+        let txid = Txid::from_byte_array([0xcc; TXID_SIZE]);
+
+        let mut buf = Vec::new();
+        txid.write(&mut buf);
+        assert_eq!(buf.len(), TXID_SIZE);
+        let mut cursor: &[u8] = &buf;
+        let decoded = Txid::read(&mut cursor).unwrap();
+        assert_eq!(decoded, txid);
+        assert!(cursor.is_empty());
     }
 }
