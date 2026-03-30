@@ -1,7 +1,8 @@
 //! BOLT 1 error message.
 
 use super::BoltError;
-use super::types::{ChannelId, MAX_MESSAGE_SIZE, read_var_bytes, write_var_bytes};
+use super::types::{ChannelId, MAX_MESSAGE_SIZE};
+use super::wire::WireFormat;
 
 /// BOLT 1 error message (type 17).
 ///
@@ -57,8 +58,8 @@ impl Error {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        self.channel_id.encode(&mut out);
-        write_var_bytes(&self.data, &mut out);
+        self.channel_id.write(&mut out);
+        self.data.write(&mut out);
         out
     }
 
@@ -69,8 +70,8 @@ impl Error {
     /// Returns `Truncated` if the payload is too short.
     pub fn decode(payload: &[u8]) -> Result<Self, BoltError> {
         let mut cursor = payload;
-        let channel_id = ChannelId::decode(&mut cursor)?;
-        let data = read_var_bytes(&mut cursor)?;
+        let channel_id = ChannelId::read(&mut cursor)?;
+        let data = Vec::<u8>::read(&mut cursor)?;
 
         Ok(Self { channel_id, data })
     }
