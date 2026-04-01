@@ -44,7 +44,35 @@ impl ProgramBuilder {
 
     /// Appends an instruction and registers its output variable (if any) as a
     /// candidate. Returns the instruction index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the inputs have the wrong count, reference out-of-bounds or
+    /// void instructions, or have mismatched types.
     pub fn append(&mut self, operation: Operation, inputs: &[usize]) -> usize {
+        let expected = operation.input_types();
+        assert_eq!(
+            inputs.len(),
+            expected.len(),
+            "{operation:?}: expected {} inputs, got {}",
+            expected.len(),
+            inputs.len(),
+        );
+        let len = self.instructions.len();
+        for (i, (&input_idx, &expected_type)) in inputs.iter().zip(expected.iter()).enumerate() {
+            let actual_type = self
+                .instructions
+                .get(input_idx)
+                .and_then(|instr| instr.operation.output_type())
+                .unwrap_or_else(|| {
+                    panic!("{operation:?} input {i}: index {input_idx} out of bounds ({len})")
+                });
+            assert_eq!(
+                actual_type, expected_type,
+                "{operation:?} input {i}: expected {expected_type:?}, got {actual_type:?}",
+            );
+        }
+
         let idx = self.instructions.len();
 
         if let Some(out_type) = operation.output_type() {
