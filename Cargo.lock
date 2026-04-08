@@ -526,6 +526,7 @@ dependencies = [
  "secp256k1",
  "serde",
  "smite",
+ "thiserror",
 ]
 
 [[package]]
