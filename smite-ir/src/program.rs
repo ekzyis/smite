@@ -11,6 +11,9 @@ use super::instruction::Instruction;
 ///
 /// Programs are serialized with postcard for transport between the AFL++ custom
 /// mutator and the scenario executor.
+// TODO: add `validate` method for mutators to check deserialized programs
+// before mutation. Invalid programs should be rejected so that we don't panic
+// when modifying and rebuilding them via `ProgramBuilder`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Program {
     /// Instructions in SSA order.
