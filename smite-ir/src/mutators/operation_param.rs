@@ -194,23 +194,28 @@ fn mutate_bytes(bytes: &mut Vec<u8>, rng: &mut impl Rng) {
     }
 }
 
-fn mutate_fixed_bytes(bytes: &mut [u8; 32], rng: &mut impl Rng) {
+/// In-place byte tweaks that preserve the slice's length.
+fn mutate_fixed_bytes(bytes: &mut [u8], rng: &mut impl Rng) {
+    if bytes.is_empty() {
+        return;
+    }
+    let n = bytes.len();
     match rng.random_range(0..6) {
         // Flip a random bit.
         0 => {
-            let idx = rng.random_range(0..32);
+            let idx = rng.random_range(0..n);
             bytes[idx] ^= 1 << rng.random_range(0..8u8);
         }
         // Change a random byte.
         1 => {
-            let idx = rng.random_range(0..32);
+            let idx = rng.random_range(0..n);
             bytes[idx] = rng.random();
         }
         // Shuffle a random subrange.
         2 => shuffle_subrange(bytes, rng),
         // Add or subtract a small delta from a random byte.
         3 => {
-            let idx = rng.random_range(0..32);
+            let idx = rng.random_range(0..n);
             let delta = rng.random_range(1..=35);
             if rng.random() {
                 bytes[idx] = bytes[idx].wrapping_add(delta);
@@ -219,14 +224,15 @@ fn mutate_fixed_bytes(bytes: &mut [u8; 32], rng: &mut impl Rng) {
             }
         }
         // Copy a chunk from one position to another.
-        4 => {
-            let len = rng.random_range(1..=31);
-            let src = rng.random_range(0..=32 - len);
-            let dst = rng.random_range(0..=32 - len);
+        4 if n >= 2 => {
+            let max_len = (n - 1).min(32);
+            let len = rng.random_range(1..=max_len);
+            let src = rng.random_range(0..=n - len);
+            let dst = rng.random_range(0..=n - len);
             bytes.copy_within(src..src + len, dst);
         }
         // Randomize entirely.
-        _ => rng.fill(&mut bytes[..]),
+        _ => rng.fill(bytes),
     }
 }
 
