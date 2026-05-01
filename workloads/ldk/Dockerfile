@@ -51,7 +51,12 @@ WORKDIR /ldk-wrapper
 COPY workloads/ldk/Cargo.toml workloads/ldk/Cargo.lock ./
 COPY workloads/ldk/src/ src/
 ENV AFL_NO_CFG_FUZZING=1
-RUN cargo afl build --release
+# reuse compiled dependencies across container builds
+# cargo will still recompile the target on any relevant changes
+RUN --mount=type=cache,target=/ldk-wrapper/target \
+    cargo afl build --release && \
+    mkdir -p /artifacts && \
+    cp /ldk-wrapper/target/release/ldk-node-wrapper /artifacts/ldk-node-wrapper
 
 # Copy smite workspace files and build the Rust ldk-scenario binary
 WORKDIR /smite
@@ -61,7 +66,7 @@ COPY smite-ir/ smite-ir/
 COPY smite-ir-mutator/ smite-ir-mutator/
 COPY smite-nyx-sys/ smite-nyx-sys/
 COPY smite-scenarios/ smite-scenarios/
-RUN TARGET_PATH=/ldk-wrapper/target/release/ldk-node-wrapper \
+RUN TARGET_PATH=/artifacts/ldk-node-wrapper \
     cargo build -p smite-scenarios --bin ldk_${SCENARIO} --release --features nyx
 
 # Build crash handler shared libraries, LD_PRELOADed into ldk-node-wrapper to
@@ -84,7 +89,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy ldk-node-wrapper binary and crash handlers
-COPY --from=builder /ldk-wrapper/target/release/ldk-node-wrapper /usr/local/bin/ldk-node-wrapper
+COPY --from=builder /artifacts/ldk-node-wrapper /usr/local/bin/ldk-node-wrapper
 COPY --from=builder /nyx-crash-handler.so /crash-handler.so /
 
 # Copy Bitcoin Core binaries
