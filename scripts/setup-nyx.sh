@@ -1,26 +1,28 @@
 #!/bin/bash
 #
-# Setup script for Nyx mode fuzzing with AFL++
+# Modified setup script for Nyx mode fuzzing with AFL++
 #
-# Usage: ./scripts/setup-nyx.sh <sharedir> <docker-image> <aflplusplus-path>
+# Usage: ./scripts/setup-nyx.sh <target> <scenario>
 #
 # Example:
-#   ./scripts/setup-nyx.sh /tmp/smite-lnd-nyx smite-lnd ~/AFLplusplus
+#   ./scripts/setup-nyx.sh lnd encrypted_bytes
 #
-# Creates the necessary files in sharedir for snapshot fuzzing using
-# docker-image.  Requires that docker-image is already built and that AFL++ has
-# been built from source (including Nyx mode) at aflplusplus-path.
 
-set -eu
+set -e
 
-if [ $# -ne 3 ]; then
-    echo "Usage: $0 <sharedir> <docker-image> <aflplusplus-path>"
+TARGET="$1"
+SCENARIO="$2"
+DOCKER_IMAGE="smite-$TARGET-$SCENARIO"
+
+docker build -t "$DOCKER_IMAGE" -f workloads/$TARGET/Dockerfile --build-arg SCENARIO=$SCENARIO .
+
+SHAREDIR=/tmp/smite-nyx
+AFLPP_PATH=/nix/store/isck0bnfyqdfmcyv94cp1g8nwsfmr89p-aflplusplus-4.35c
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 <target> <scenario>"
     exit 1
 fi
-
-SHAREDIR="$1"
-DOCKER_IMAGE="$2"
-AFLPP_PATH="$3"
 
 # Validate AFL++ path
 if [ ! -d "$AFLPP_PATH/nyx_mode/packer/packer" ]; then
@@ -62,7 +64,7 @@ cp "$BINARIES_PATH"/* "$SHAREDIR/"
 
 # Generate Nyx config
 echo "Generating Nyx config..."
-(cd "$PACKER_PATH" && python3 nyx_config_gen.py "$SHAREDIR" Kernel -m 4096)
+(cd "$PACKER_PATH" && ./nyx_config_gen.py "$SHAREDIR" Kernel -m 4096)
 
 # Create fuzz_no_pt.sh script
 echo "Creating fuzz_no_pt.sh..."
@@ -103,4 +105,4 @@ ls -lh "$SHAREDIR"
 echo ""
 echo "To start fuzzing, run:"
 echo "  mkdir -p /tmp/smite-seeds && echo 'AAAA' > /tmp/smite-seeds/seed1"
-echo "  $AFLPP_PATH/afl-fuzz -X -i /tmp/smite-seeds -o /tmp/smite-out -- $SHAREDIR"
+echo "  $AFLPP_PATH/bin/afl-fuzz -X -i /tmp/smite-seeds -o /tmp/smite-out -- $SHAREDIR"
