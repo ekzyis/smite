@@ -1,0 +1,22 @@
+name: Docker
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        target: [lnd, ldk, cln, eclair]
+      # don't skip other targets if one fails
+      fail-fast: false
+    uses: ./.github/workflows/docker-target.yml
+    with:
+      target: ${{ matrix.target }}
