@@ -3,15 +3,18 @@
 //! Executes an IR program against a target node over an established connection,
 //! producing side effects (sending/receiving messages).
 
-use bitcoin::ScriptBuf;
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
+use bitcoin::{OutPoint, ScriptBuf};
 use smite::bitcoin::{BitcoinCli, Utxo};
 use smite::bolt::{
-    AcceptChannel, ChannelAnnouncement, ChannelId, ChannelUpdate, Message, NodeAnnouncement,
-    OpenChannel, OpenChannelTlvs, Pong, ShortChannelId, msg_type,
+    AcceptChannel, ChannelAnnouncement, ChannelId, ChannelUpdate, FundingCreated, Message,
+    NodeAnnouncement, OpenChannel, OpenChannelTlvs, Pong, ShortChannelId, msg_type,
 };
-use smite::channel_tx::{FundingTransaction, build_funding_transaction};
+use smite::channel_tx::{
+    ChannelConfig, ChannelPartyConfig, FundingTransaction, HolderIdentity, Side,
+    build_funding_transaction,
+};
 use smite::noise::{ConnectionError, NoiseConnection};
 use smite_ir::operation::AcceptChannelField;
 use smite_ir::{Operation, Program, Variable};
@@ -112,6 +115,10 @@ pub enum ExecuteError {
     /// Wallet UTXOs could not cover the funding amount and fees.
     #[error("funding: {0}")]
     InsufficientFunds(#[from] smite::channel_tx::InsufficientFunds),
+
+    /// Failed to construct the initial commitment state.
+    #[error("commitment: {0}")]
+    Commitment(#[from] smite::channel_tx::CommitmentError),
 }
 
 /// Executes IR programs against a target over an established connection.
@@ -145,8 +152,9 @@ impl<C: Connection, B: BitcoinRpc> Executor<C, B> {
     /// # Errors
     ///
     /// Returns an error on a connection/send/receive failure, a decode failure of
-    /// a received message, an unexpected message type from the target, or when
-    /// wallet funds are insufficient to perform a channel operation.
+    /// a received message, an unexpected message type from the target, when
+    /// wallet funds are insufficient to perform a channel operation, or when the
+    /// initial commitment transaction cannot be constructed.
     ///
     /// # Panics
     ///
@@ -233,6 +241,12 @@ impl<C: Connection, B: BitcoinRpc> Executor<C, B> {
                     let oc = build_open_channel(&variables, &instr.inputs);
                     let encoded = Message::OpenChannel(oc).encode();
                     Some(Variable::OpenChannelMessage(encoded))
+                }
+
+                Operation::BuildFundingCreated => {
+                    let fc = build_funding_created(&variables, &instr.inputs)?;
+                    let encoded = Message::FundingCreated(fc).encode();
+                    Some(Variable::FundingCreatedMessage(encoded))
                 }
 
                 Operation::BuildChannelAnnouncement => {
@@ -568,6 +582,78 @@ fn build_open_channel(variables: &[Option<Variable>], inputs: &[usize]) -> OpenC
     }
 }
 
+/// Builds a `funding_created` message from 20 input variables.
+fn build_funding_created(
+    variables: &[Option<Variable>],
+    inputs: &[usize],
+) -> Result<FundingCreated, ExecuteError> {
+    let funding_tx = resolve_funding_transaction(variables, inputs[0]);
+    let funding_outpoint = OutPoint {
+        txid: funding_tx.tx.compute_txid(),
+        vout: funding_tx.vout,
+    };
+
+    let funding_satoshis = resolve_amount(variables, inputs[1]);
+    let channel_type = resolve_features(variables, inputs[2]).to_vec();
+    let opener_funding_privkey_bytes = resolve_private_key(variables, inputs[3]);
+    let opener_funding_privkey =
+        SecretKey::from_slice(&opener_funding_privkey_bytes).expect("valid private key");
+    let secp = Secp256k1::new();
+    let opener_funding_pubkey = PublicKey::from_secret_key(&secp, &opener_funding_privkey);
+
+    let opener = ChannelPartyConfig {
+        funding_pubkey: opener_funding_pubkey,
+        payment_basepoint: resolve_pubkey(variables, inputs[4]),
+        revocation_basepoint: resolve_pubkey(variables, inputs[5]),
+        delayed_payment_basepoint: resolve_pubkey(variables, inputs[6]),
+        dust_limit_satoshis: resolve_amount(variables, inputs[7]),
+        to_self_delay: resolve_u16(variables, inputs[8]),
+    };
+    let acceptor = ChannelPartyConfig {
+        funding_pubkey: resolve_pubkey(variables, inputs[9]),
+        payment_basepoint: resolve_pubkey(variables, inputs[10]),
+        revocation_basepoint: resolve_pubkey(variables, inputs[11]),
+        delayed_payment_basepoint: resolve_pubkey(variables, inputs[12]),
+        dust_limit_satoshis: resolve_amount(variables, inputs[13]),
+        to_self_delay: resolve_u16(variables, inputs[14]),
+    };
+    let config = ChannelConfig {
+        funding_outpoint,
+        funding_satoshis,
+        channel_type,
+        opener,
+        acceptor,
+    };
+
+    let temporary_channel_id = resolve_channel_id(variables, inputs[15]);
+    let push_msat = resolve_amount(variables, inputs[16]);
+    let feerate_per_kw = resolve_feerate(variables, inputs[17]);
+    let opener_per_commitment_point = resolve_pubkey(variables, inputs[18]);
+    let acceptor_per_commitment_point = resolve_pubkey(variables, inputs[19]);
+
+    let state = config.new_initial_commitment(
+        push_msat,
+        feerate_per_kw,
+        opener_per_commitment_point,
+        acceptor_per_commitment_point,
+    )?;
+    let holder = HolderIdentity {
+        side: Side::Opener,
+        funding_privkey: opener_funding_privkey,
+    };
+    let signature = config.sign_counterparty_commitment(&state, &holder);
+
+    let funding_output_index = u16::try_from(funding_outpoint.vout)
+        .expect("funding output index of a funding tx must fit in u16");
+
+    Ok(FundingCreated {
+        temporary_channel_id,
+        funding_txid: funding_outpoint.txid,
+        funding_output_index,
+        signature,
+    })
+}
+
 /// Builds a signed `ChannelAnnouncement` from 7 input variables.
 fn build_channel_announcement(
     variables: &[Option<Variable>],
@@ -755,7 +841,7 @@ mod tests {
 
     use super::*;
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
-    use bitcoin::{Amount, OutPoint, Transaction};
+    use bitcoin::{Amount, Transaction};
     use smite::bolt::{AcceptChannelTlvs, Init, Ping};
     use smite_ir::Instruction;
 
@@ -1842,6 +1928,117 @@ mod tests {
         };
         assert_eq!(funds_err.available, Amount::from_sat(1_000));
         assert_eq!(funds_err.required, Amount::from_sat(10_007_290));
+    }
+
+    fn build_funding_created_instructions() -> Vec<Instruction> {
+        let mut instrs = create_and_broadcast_tx_instructions();
+        instrs.extend(vec![
+            Instruction {
+                operation: Operation::LoadFeatures(vec![]),
+                inputs: vec![],
+            },
+            Instruction {
+                operation: Operation::LoadAmount(546),
+                inputs: vec![],
+            },
+            Instruction {
+                operation: Operation::LoadU16(144),
+                inputs: vec![],
+            },
+            Instruction {
+                operation: Operation::LoadChannelId([0xbb; 32]),
+                inputs: vec![],
+            },
+            Instruction {
+                operation: Operation::LoadAmount(3_000_000_000),
+                inputs: vec![],
+            },
+            Instruction {
+                operation: Operation::LoadFeeratePerKw(15_000),
+                inputs: vec![],
+            },
+            Instruction {
+                operation: Operation::LoadAmount(u64::MAX),
+                inputs: vec![],
+            },
+            Instruction {
+                operation: Operation::BuildFundingCreated,
+                inputs: vec![
+                    6, 4, 8, 0, 1, 1, 1, 9, 10, 3, 3, 3, 3, 9, 10, 11, 12, 13, 1, 3,
+                ],
+            },
+        ]);
+        instrs
+    }
+
+    #[test]
+    fn execute_build_funding_created() {
+        let mock_cli = MockBitcoinCli {
+            utxos: vec![sample_utxo()],
+            change_spk: sample_change_spk(),
+            ..Default::default()
+        };
+        Executor::new(MockConnection::new(), mock_cli, sample_context())
+            .execute(
+                &Program {
+                    instructions: build_funding_created_instructions(),
+                },
+                std::time::Instant::now(),
+            )
+            .expect("BuildFundingCreated execution should succeed");
+    }
+
+    #[test]
+    fn execute_build_funding_created_push_exceeds_funding() {
+        // push_msat (v12) larger than the funding amount surfaces the commitment
+        // construction error.
+        let mut instrs = build_funding_created_instructions();
+        instrs[12] = Instruction {
+            operation: Operation::LoadAmount(20_000_000_000),
+            inputs: vec![],
+        };
+        let mock_cli = MockBitcoinCli {
+            utxos: vec![sample_utxo()],
+            change_spk: sample_change_spk(),
+            ..Default::default()
+        };
+        let err = Executor::new(MockConnection::new(), mock_cli, sample_context())
+            .execute(
+                &Program {
+                    instructions: instrs,
+                },
+                std::time::Instant::now(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ExecuteError::Commitment(smite::channel_tx::CommitmentError::PushExceedsFunding)
+        ));
+    }
+
+    #[test]
+    fn execute_build_funding_created_funding_msat_overflow() {
+        // Re-point funding_satoshis (input index 1) to the u64::MAX amount (v14)
+        // so converting it to millisatoshis overflows.
+        let mut instrs = build_funding_created_instructions();
+        instrs[15].inputs[1] = 14;
+        let mock_cli = MockBitcoinCli {
+            utxos: vec![sample_utxo()],
+            change_spk: sample_change_spk(),
+            ..Default::default()
+        };
+        let err = Executor::new(MockConnection::new(), mock_cli, sample_context())
+            .execute(
+                &Program {
+                    instructions: instrs,
+                },
+                std::time::Instant::now(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ExecuteError::Commitment(smite::channel_tx::CommitmentError::FundingMsatOverflow)
+        ));
     }
 
     // -- extract_field tests --

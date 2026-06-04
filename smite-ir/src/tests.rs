@@ -475,6 +475,16 @@ fn postcard_roundtrip() {
                 operation: Operation::BroadcastTransaction,
                 inputs: vec![10],
             },
+            Instruction {
+                operation: Operation::LoadU16(144),
+                inputs: vec![],
+            },
+            Instruction {
+                operation: Operation::BuildFundingCreated,
+                inputs: vec![
+                    10, 4, 5, 0, 1, 1, 1, 4, 12, 1, 1, 1, 1, 4, 12, 3, 5, 10, 1, 1,
+                ],
+            },
         ],
     };
 
@@ -583,6 +593,112 @@ fn displays_create_and_broadcast_tx_program() {
         "BroadcastTransaction(v6)".into(),
     ];
     assert_eq!(lines, expected);
+}
+
+#[test]
+fn displays_build_funding_created_program() {
+    let instructions = vec![
+        // Funding transaction.
+        Instruction {
+            operation: Operation::LoadPrivateKey(key(1)),
+            inputs: vec![],
+        },
+        Instruction {
+            operation: Operation::DerivePoint,
+            inputs: vec![0],
+        },
+        Instruction {
+            operation: Operation::LoadAmount(10_000_000),
+            inputs: vec![],
+        },
+        Instruction {
+            operation: Operation::LoadFeeratePerKw(15_000),
+            inputs: vec![],
+        },
+        Instruction {
+            operation: Operation::CreateFundingTransaction,
+            inputs: vec![1, 1, 2, 3],
+        },
+        // funding_created parameters.
+        Instruction {
+            operation: Operation::LoadFeatures(vec![0x01, 0x02]),
+            inputs: vec![],
+        },
+        Instruction {
+            operation: Operation::LoadPrivateKey(key(2)),
+            inputs: vec![],
+        },
+        Instruction {
+            operation: Operation::DerivePoint,
+            inputs: vec![6],
+        },
+        Instruction {
+            operation: Operation::LoadAmount(546),
+            inputs: vec![],
+        },
+        Instruction {
+            operation: Operation::LoadU16(144),
+            inputs: vec![],
+        },
+        Instruction {
+            operation: Operation::LoadPrivateKey(key(3)),
+            inputs: vec![],
+        },
+        Instruction {
+            operation: Operation::DerivePoint,
+            inputs: vec![10],
+        },
+        Instruction {
+            operation: Operation::LoadChannelId([0xbb; 32]),
+            inputs: vec![],
+        },
+        Instruction {
+            operation: Operation::LoadAmount(0),
+            inputs: vec![],
+        },
+        Instruction {
+            operation: Operation::LoadFeeratePerKw(253),
+            inputs: vec![],
+        },
+        // Build funding_created.
+        Instruction {
+            operation: Operation::BuildFundingCreated,
+            inputs: vec![
+                4, 2, 5, 0, 7, 7, 7, 8, 9, 11, 11, 11, 11, 8, 9, 12, 13, 14, 7, 11,
+            ],
+        },
+    ];
+
+    let program = Program { instructions };
+    let text = program.to_string();
+    let lines: Vec<&str> = text.lines().collect();
+
+    let z31 = "00".repeat(31);
+    let b32 = "bb".repeat(32);
+
+    let expected: Vec<String> = vec![
+        format!("v0 = LoadPrivateKey(0x{z31}01)"),
+        "v1 = DerivePoint(v0)".into(),
+        "v2 = LoadAmount(10000000)".into(),
+        "v3 = LoadFeeratePerKw(15000)".into(),
+        "v4 = CreateFundingTransaction(v1, v1, v2, v3)".into(),
+        "v5 = LoadFeatures(0x0102)".into(),
+        format!("v6 = LoadPrivateKey(0x{z31}02)"),
+        "v7 = DerivePoint(v6)".into(),
+        "v8 = LoadAmount(546)".into(),
+        "v9 = LoadU16(144)".into(),
+        format!("v10 = LoadPrivateKey(0x{z31}03)"),
+        "v11 = DerivePoint(v10)".into(),
+        format!("v12 = LoadChannelId(0x{b32})"),
+        "v13 = LoadAmount(0)".into(),
+        "v14 = LoadFeeratePerKw(253)".into(),
+        "v15 = BuildFundingCreated(v4, v2, v5, v0, v7, v7, v7, v8, v9, v11, v11, v11, v11, v8, v9, v12, v13, v14, v7, v11)".into(),
+    ];
+
+    assert_eq!(lines.len(), expected.len(), "line count mismatch");
+    for (i, (got, want)) in lines.iter().zip(expected.iter()).enumerate() {
+        assert_eq!(got, want, "line {i} mismatch");
+    }
 }
 
 // Ensure AcceptChannelField and AcceptChannelField::ALL stay in sync. The

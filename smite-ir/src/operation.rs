@@ -107,6 +107,30 @@ pub enum Operation {
     ///  18: `upfront_shutdown_script` (`Bytes`, empty = omit TLV)
     ///  19: `channel_type` (`Features`, empty = omit TLV)
     BuildOpenChannel,
+    /// Build a `funding_created` message (BOLT 2, type 34).
+    ///
+    /// Inputs (20):
+    ///   0: `funding_transaction` (`FundingTransaction`)
+    ///   1: `funding_satoshis` (`Amount`)
+    ///   2: `channel_type` (`Features`)
+    ///   3: `opener_funding_privkey` (`PrivateKey`)
+    ///   4: `opener_payment_basepoint` (`Point`)
+    ///   5: `opener_revocation_basepoint` (`Point`)
+    ///   6: `opener_delayed_payment_basepoint` (`Point`)
+    ///   7: `opener_dust_limit_satoshis` (`Amount`)
+    ///   8: `opener_to_self_delay` (`U16`)
+    ///   9: `acceptor_funding_pubkey` (`Point`)
+    ///  10: `acceptor_payment_basepoint` (`Point`)
+    ///  11: `acceptor_revocation_basepoint` (`Point`)
+    ///  12: `acceptor_delayed_payment_basepoint` (`Point`)
+    ///  13: `acceptor_dust_limit_satoshis` (`Amount`)
+    ///  14: `acceptor_to_self_delay` (`U16`)
+    ///  15: `temporary_channel_id` (`ChannelId`)
+    ///  16: `push_msat` (`Amount`)
+    ///  17: `feerate_per_kw` (`FeeratePerKw`)
+    ///  18: `opener_per_commitment_point` (`Point`)
+    ///  19: `acceptor_per_commitment_point` (`Point`)
+    BuildFundingCreated,
     /// Build a `channel_announcement` message (BOLT 7, type 256).
     ///
     /// All four `PrivateKey` inputs are used to sign the body.
@@ -609,6 +633,7 @@ impl fmt::Display for Operation {
             Self::ExtractAcceptChannel(field) => write!(f, "Extract{field}"),
             Self::CreateFundingTransaction => write!(f, "CreateFundingTransaction"),
             Self::BuildOpenChannel => write!(f, "BuildOpenChannel"),
+            Self::BuildFundingCreated => write!(f, "BuildFundingCreated"),
             Self::BuildChannelAnnouncement => write!(f, "BuildChannelAnnouncement"),
             Self::BuildNodeAnnouncement { rgb_color, alias } => write!(
                 f,
@@ -646,6 +671,7 @@ impl Operation {
             Self::ExtractAcceptChannel(field) => Some(field.output_type()),
             Self::CreateFundingTransaction => Some(VariableType::FundingTransaction),
             Self::BuildOpenChannel => Some(VariableType::OpenChannelMessage),
+            Self::BuildFundingCreated => Some(VariableType::FundingCreatedMessage),
             Self::BuildChannelAnnouncement
             | Self::BuildNodeAnnouncement { .. }
             | Self::BuildChannelUpdate => Some(VariableType::Message),
@@ -657,6 +683,7 @@ impl Operation {
 
     /// Returns the expected variable types for each input position.
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn input_types(&self) -> Vec<VariableType> {
         match self {
             Self::LoadAmount(_)
@@ -711,6 +738,29 @@ impl Operation {
                 VariableType::U8,           // channel_flags
                 VariableType::Bytes,        // upfront_shutdown_script
                 VariableType::Features,     // channel_type
+            ],
+
+            Self::BuildFundingCreated => vec![
+                VariableType::FundingTransaction, // funding_transaction
+                VariableType::Amount,             // funding_satoshis
+                VariableType::Features,           // channel_type
+                VariableType::PrivateKey,         // opener_funding_privkey
+                VariableType::Point,              // opener_payment_basepoint
+                VariableType::Point,              // opener_revocation_basepoint
+                VariableType::Point,              // opener_delayed_payment_basepoint
+                VariableType::Amount,             // opener_dust_limit_satoshis
+                VariableType::U16,                // opener_to_self_delay
+                VariableType::Point,              // acceptor_funding_pubkey
+                VariableType::Point,              // acceptor_payment_basepoint
+                VariableType::Point,              // acceptor_revocation_basepoint
+                VariableType::Point,              // acceptor_delayed_payment_basepoint
+                VariableType::Amount,             // acceptor_dust_limit_satoshis
+                VariableType::U16,                // acceptor_to_self_delay
+                VariableType::ChannelId,          // temporary_channel_id
+                VariableType::Amount,             // push_msat
+                VariableType::FeeratePerKw,       // feerate_per_kw
+                VariableType::Point,              // opener_per_commitment_point
+                VariableType::Point,              // acceptor_per_commitment_point
             ],
 
             Self::BuildChannelAnnouncement => vec![
@@ -774,6 +824,7 @@ impl Operation {
             | Self::ExtractAcceptChannel(_)
             | Self::CreateFundingTransaction
             | Self::BuildOpenChannel
+            | Self::BuildFundingCreated
             | Self::BuildChannelAnnouncement
             | Self::BuildNodeAnnouncement { .. }
             | Self::BuildChannelUpdate
@@ -820,6 +871,7 @@ impl Operation {
             | Self::DerivePoint
             | Self::ExtractAcceptChannel(_)
             | Self::BuildOpenChannel
+            | Self::BuildFundingCreated
             | Self::BuildNodeAnnouncement { .. }
             | Self::BuildChannelUpdate => false,
         }
@@ -853,6 +905,7 @@ impl Operation {
             | Self::DerivePoint
             | Self::CreateFundingTransaction
             | Self::BuildOpenChannel
+            | Self::BuildFundingCreated
             | Self::BuildChannelAnnouncement
             | Self::BuildChannelUpdate
             | Self::SendMessage
