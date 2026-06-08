@@ -128,14 +128,10 @@ impl MutatorState {
 /// mutator.
 #[cfg(not(test))]
 fn warn_on_unset_afl_env() {
-    let unset: Vec<&str> = [
-        "AFL_CUSTOM_MUTATOR_ONLY",
-        "AFL_FRAMESHIFT_DISABLE",
-        "AFL_DISABLE_TRIM",
-    ]
-    .into_iter()
-    .filter(|name| std::env::var(name).unwrap_or_default() != "1")
-    .collect();
+    let unset: Vec<&str> = ["AFL_CUSTOM_MUTATOR_ONLY", "AFL_FRAMESHIFT_DISABLE"]
+        .into_iter()
+        .filter(|name| std::env::var(name).unwrap_or_default() != "1")
+        .collect();
 
     if unset.is_empty() {
         return;
