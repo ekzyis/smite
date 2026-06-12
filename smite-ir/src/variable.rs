@@ -48,6 +48,8 @@ pub enum Variable {
     Message(Vec<u8>),
     /// Encoded BOLT `open_channel` message with type 32 prefix, ready to send.
     OpenChannelMessage(Vec<u8>),
+    /// Encoded BOLT `funding_created` message with type 34 prefix, ready to send.
+    FundingCreatedMessage(Vec<u8>),
     /// Parsed `accept_channel` response.
     AcceptChannel(AcceptChannel),
     /// Constructed funding transaction with funding output index.
@@ -56,6 +58,8 @@ pub enum Variable {
     // Affine (single-use) variables
     /// `open_channel` has been sent, so `accept_channel` may now be received.
     SentOpenChannel,
+    /// `funding_created` has been sent, so `funding_signed` may now be received.
+    SentFundingCreated,
 }
 
 impl Variable {
@@ -79,9 +83,11 @@ impl Variable {
             Self::Features(_) => VariableType::Features,
             Self::Message(_) => VariableType::Message,
             Self::OpenChannelMessage(_) => VariableType::OpenChannelMessage,
+            Self::FundingCreatedMessage(_) => VariableType::FundingCreatedMessage,
             Self::AcceptChannel(_) => VariableType::AcceptChannel,
             Self::FundingTransaction(_) => VariableType::FundingTransaction,
             Self::SentOpenChannel => VariableType::SentOpenChannel,
+            Self::SentFundingCreated => VariableType::SentFundingCreated,
         }
     }
 }
@@ -106,16 +112,18 @@ pub enum VariableType {
     Features,
     Message,
     OpenChannelMessage,
+    FundingCreatedMessage,
     AcceptChannel,
     FundingTransaction,
     SentOpenChannel,
+    SentFundingCreated,
 }
 
 impl VariableType {
     #[must_use]
     pub fn is_affine(&self) -> bool {
         match self {
-            Self::SentOpenChannel => true,
+            Self::SentOpenChannel | Self::SentFundingCreated => true,
 
             Self::Bytes
             | Self::ChainHash
@@ -132,6 +140,7 @@ impl VariableType {
             | Self::Features
             | Self::Message
             | Self::OpenChannelMessage
+            | Self::FundingCreatedMessage
             | Self::AcceptChannel
             | Self::ShortChannelId
             | Self::FundingTransaction => false,
