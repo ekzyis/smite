@@ -11,7 +11,9 @@ use generators::{
     OpenChannelGenerator,
 };
 use minimizers::{CommonSubexpressionEliminator, DeadCodeEliminator, Minimizer};
-use mutators::{InputSwapMutator, InstructionDeleteMutator, OperationParamMutator};
+use mutators::{
+    InputSwapMutator, InstructionDeleteMutator, InstructionReorderMutator, OperationParamMutator,
+};
 use operation::{AcceptChannelField, ChannelTypeVariant, ShutdownScriptVariant};
 
 /// Helper to build a private key with a single distinguishing byte.
@@ -1361,6 +1363,16 @@ fn assert_false_is_noop<M: Mutator>(mutator: &M, original: &Program) {
     }
 }
 
+fn assert_mutator_preserves_well_formedness<M: Mutator>(mutator: &M, original: &Program) {
+    let mut rng = SmallRng::seed_from_u64(0);
+    for _ in 0..100 {
+        let mut program = original.clone();
+        if mutator.mutate(&mut program, &mut rng) {
+            assert_well_formed(&program);
+        }
+    }
+}
+
 #[test]
 fn param_mutator_false_is_noop() {
     let original = Program {
@@ -1650,15 +1662,7 @@ fn input_swap_returns_false_when_no_alternatives() {
 #[test]
 fn input_swap_preserves_well_formedness() {
     let original = generate_open_channel_program(0);
-    let mutator = InputSwapMutator;
-    let mut rng = SmallRng::seed_from_u64(0);
-
-    for _ in 0..100 {
-        let mut program = original.clone();
-        if mutator.mutate(&mut program, &mut rng) {
-            assert_well_formed(&program);
-        }
-    }
+    assert_mutator_preserves_well_formedness(&InputSwapMutator, &original);
 }
 
 #[test]
@@ -1920,6 +1924,156 @@ fn instr_delete_maintains_validity() {
             assert_well_formed(&program);
         }
     }
+}
+
+// -- InstructionReorderMutator tests --
+
+#[test]
+fn instr_reorder_false_is_noop() {
+    let original = generate_open_channel_program(0);
+    assert_false_is_noop(&InstructionReorderMutator, &original);
+}
+
+#[test]
+fn instr_reorder_returns_false_on_empty() {
+    let mut program = Program {
+        instructions: vec![],
+    };
+    let mut rng = SmallRng::seed_from_u64(0);
+    let mutator = InstructionReorderMutator;
+    assert!(!mutator.mutate(&mut program, &mut rng));
+}
+
+#[test]
+fn instr_reorder_returns_false_on_single_or_no_act() {
+    // ChannelAnnouncementGenerator produces a single Act instruction: SendMessage.
+    let mut program = generate_channel_announcement_program(0);
+    let mutator = InstructionReorderMutator;
+    let mut rng = SmallRng::seed_from_u64(0);
+
+    assert!(!mutator.mutate(&mut program, &mut rng));
+    // Delete the SendMessage instruction at the end. The program is now
+    // non-empty with 0 Act instructions.
+    program.instructions.pop();
+    assert!(!mutator.mutate(&mut program, &mut rng));
+}
+
+#[test]
+fn instr_reorder_returns_false_if_act2_is_past_usage_boundary() {
+    // Invalid program, but mutators shouldn't care about program validity.
+    // Two of the three Act instructions are immediately consumed.
+    let mut program = Program {
+        instructions: vec![
+            Instruction {
+                operation: Operation::BuildOpenChannel,
+                inputs: vec![],
+            },
+            Instruction {
+                operation: Operation::SendOpenChannel,
+                inputs: vec![0],
+            },
+            Instruction {
+                operation: Operation::RecvAcceptChannel,
+                inputs: vec![1],
+            },
+            Instruction {
+                operation: Operation::ExtractAcceptChannel(AcceptChannelField::ChannelType),
+                inputs: vec![2],
+            },
+            Instruction {
+                operation: Operation::SendOpenChannel,
+                inputs: vec![0],
+            },
+        ],
+    };
+    let mut rng = SmallRng::seed_from_u64(0);
+    let mutator = InstructionReorderMutator;
+    for _ in 0..100 {
+        assert!(!mutator.mutate(&mut program, &mut rng));
+    }
+}
+
+#[test]
+fn instr_reorder_swaps_and_heals() {
+    // The only swappable instructions are RecvAcceptChannel and SendMessage.
+    let mut program = Program {
+        instructions: vec![
+            Instruction {
+                operation: Operation::BuildOpenChannel,
+                inputs: vec![],
+            },
+            Instruction {
+                operation: Operation::SendOpenChannel,
+                inputs: vec![0],
+            },
+            Instruction {
+                operation: Operation::RecvAcceptChannel,
+                inputs: vec![1],
+            },
+            Instruction {
+                operation: Operation::LoadChainHashFromContext,
+                inputs: vec![],
+            },
+            Instruction {
+                operation: Operation::SendMessage,
+                inputs: vec![0],
+            },
+            Instruction {
+                operation: Operation::ExtractAcceptChannel(AcceptChannelField::ChannelType),
+                inputs: vec![2],
+            },
+        ],
+    };
+    let mut rng = SmallRng::seed_from_u64(0);
+    let mutator = InstructionReorderMutator;
+    let mut mutated = false;
+    for _ in 0..100 {
+        if mutator.mutate(&mut program, &mut rng) {
+            mutated = true;
+            break;
+        }
+    }
+    assert!(
+        mutated,
+        "InstructionReorderMutator never mutated the program"
+    );
+
+    // RecvAcceptChannel and SendMessage should've been swapped.
+    assert_eq!(program.instructions[2].operation, Operation::SendMessage);
+    assert_eq!(
+        program.instructions[4].operation,
+        Operation::RecvAcceptChannel
+    );
+    // The inteleaved instruction shouldn't have been changed.
+    assert_eq!(
+        program.instructions[3].operation,
+        Operation::LoadChainHashFromContext
+    );
+    // Downstream instructions should be healed.
+    assert_eq!(program.instructions[5].inputs[0], 4);
+}
+
+#[test]
+fn instr_reorder_preserves_well_formedness() {
+    let mut original = generate_open_channel_program(0);
+    // The generic OpenChannelGenerator program doesn't have swappable Act
+    // instructions, so add some.
+    let open_channel_msg = original.instructions.len() - 3;
+    original.instructions.extend([
+        Instruction {
+            operation: Operation::MineBlocks(6),
+            inputs: vec![],
+        },
+        Instruction {
+            operation: Operation::SendOpenChannel,
+            inputs: vec![open_channel_msg],
+        },
+        Instruction {
+            operation: Operation::MineBlocks(42),
+            inputs: vec![],
+        },
+    ]);
+    assert_mutator_preserves_well_formedness(&InstructionReorderMutator, &original);
 }
 
 // -- DeadCodeEliminator tests --
