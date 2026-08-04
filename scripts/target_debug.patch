@@ -1,0 +1,68 @@
+diff --git a/scripts/setup-nyx.sh b/scripts/setup-nyx.sh
+index 614fc2a..99f0761 100755
+--- a/scripts/setup-nyx.sh
++++ b/scripts/setup-nyx.sh
+@@ -91,7 +91,7 @@ mount --rbind /dev rootfs/dev/
+ echo '127.0.0.1 localhost' > rootfs/etc/hosts
+ echo '::1 localhost' >> rootfs/etc/hosts
+ echo '# No nameserver configured' > rootfs/etc/resolv.conf
+-chroot /tmp/rootfs /init.sh
++chroot /tmp/rootfs /init.sh | ./hcat
+ cat rootfs/init.log | ./hcat
+ ./habort "$(tail rootfs/init.log)"
+ EOF
+diff --git a/smite-scenarios/src/targets/lnd.rs b/smite-scenarios/src/targets/lnd.rs
+index 2ccc722..cb6ebee 100644
+--- a/smite-scenarios/src/targets/lnd.rs
++++ b/smite-scenarios/src/targets/lnd.rs
+@@ -131,8 +131,8 @@ impl LndTarget {
+             .arg(format!("--rpclisten=127.0.0.1:{}", config.lnd_rpc_port))
+             .arg("--restlisten=127.0.0.1:8080")
+             .arg("--tlsextradomain=127.0.0.1")
+-            .stdout(Stdio::null())
+-            .stderr(Stdio::null());
++            .stdout(Stdio::inherit())
++            .stderr(Stdio::inherit());
+ 
+         // Set up coverage pipes if in fuzzing mode. We keep all four pipe ends alive
+         // until after spawn so the FDs are valid when the child forks.
+diff --git a/workloads/cln/init.sh b/workloads/cln/init.sh
+index b78dd0d..9c16c02 100644
+--- a/workloads/cln/init.sh
++++ b/workloads/cln/init.sh
+@@ -21,4 +21,4 @@ export SMITE_CRASH_HANDLER=/nyx-crash-handler.so
+ #                       snapshot to reset before the crash is reported.
+ export ASAN_OPTIONS=abort_on_error=1:log_path=/tmp/asan.log:symbolize=0
+ 
+-/cln-scenario > /init.log 2>&1
++/cln-scenario 2>&1 | tee /init.log
+diff --git a/workloads/eclair/init.sh b/workloads/eclair/init.sh
+index 71d0caa..e795c71 100644
+--- a/workloads/eclair/init.sh
++++ b/workloads/eclair/init.sh
+@@ -24,4 +24,4 @@ export SMITE_CRASH_HANDLER=/nyx-jvm-crash-handler.so
+ #   to AFL shared memory via JNI.
+ export JAVA_OPTS="-XX:TieredStopAtLevel=1 -javaagent:/eclair-sancov.jar -Djava.library.path=/usr/local/lib"
+ 
+-/eclair-scenario > /init.log 2>&1
++/eclair-scenario 2>&1 | tee /init.log
+diff --git a/workloads/ldk/init.sh b/workloads/ldk/init.sh
+index 66de649..954ff96 100644
+--- a/workloads/ldk/init.sh
++++ b/workloads/ldk/init.sh
+@@ -12,4 +12,4 @@ export PATH=$PATH:/usr/local/bin
+ # crashes via Nyx hypercalls instead of writing to a file.
+ export SMITE_CRASH_HANDLER=/nyx-crash-handler.so
+ 
+-/ldk-scenario > /init.log 2>&1
++/ldk-scenario 2>&1 | tee /init.log
+diff --git a/workloads/lnd/init.sh b/workloads/lnd/init.sh
+index a1ad12a..7a2a29f 100644
+--- a/workloads/lnd/init.sh
++++ b/workloads/lnd/init.sh
+@@ -7,4 +7,4 @@ set -eu
+ # Run the LND fuzzing harness
+ export SMITE_NYX=1
+ export PATH=$PATH:/usr/local/bin
+-/lnd-scenario > /init.log 2>&1
++/lnd-scenario 2>&1 | tee /init.log
