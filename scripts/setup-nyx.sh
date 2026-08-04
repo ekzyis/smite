@@ -13,19 +13,58 @@
 
 set -e
 
-TARGET="$1"
-SCENARIO="$2"
+TARGET=""
+SCENARIO=""
+DEBUG=0
+POS=0
+for arg in "$@"; do
+    case "$arg" in
+        --debug) DEBUG=1 ;;
+        *)
+            POS=$((POS + 1))
+            if [ "$POS" = 1 ]; then TARGET="$arg"; fi
+            if [ "$POS" = 2 ]; then SCENARIO="$arg"; fi
+            ;;
+    esac
+done
+
+if [ -z "$TARGET" ] || [ -z "$SCENARIO" ]; then
+    echo "Usage: $0 <target> <scenario> [--debug]"
+    exit 1
+fi
+
 DOCKER_IMAGE="smite-$TARGET-$SCENARIO"
-
-docker build -t "$DOCKER_IMAGE" -f workloads/$TARGET/Dockerfile --build-arg SCENARIO=$SCENARIO .
-
 SHAREDIR=/tmp/smite-nyx
 AFLPP_PATH=/nix/store/isck0bnfyqdfmcyv94cp1g8nwsfmr89p-aflplusplus-4.35c
 
-if [ -z "$1" ]; then
-    echo "Usage: $0 <target> <scenario>"
-    exit 1
+# Single EXIT handler: revert the debug patch (if applied) and remove the temp
+# dir created later for Nyx config generation. bash keeps only one EXIT trap, so
+# both must go through here.
+DEBUG_PATCH=scripts/target_debug.patch
+FORCE_FORK_DIR="$(mktemp -d)"
+cleanup() {
+    if [ "$DEBUG" = 1 ]; then
+        # don't patch the file we're currently running
+        # it's included in the patch for manual apply
+        git apply -R --exclude=scripts/setup-nyx.sh "$DEBUG_PATCH" 2>/dev/null || true
+    fi
+    if [ -n "$FORCE_FORK_DIR" ]; then
+        rm -rf "$FORCE_FORK_DIR"
+    fi
+}
+trap cleanup EXIT
+
+# In debug mode, patch the target so it surfaces its logs (init.sh tees to
+# stdout, LND child stdio inherited), then build the image with it. The patch's
+# setup-nyx.sh hunk is excluded to avoid rewriting this running script; its
+# live-hcat effect is reproduced by a sed on the generated fuzz_no_pt.sh below.
+if [ "$DEBUG" = 1 ]; then
+    git apply --exclude=scripts/setup-nyx.sh "$DEBUG_PATCH"
+    echo "~~~ debug mode: patch applied: $DEBUG_PATCH ~~~"
+    git diff
 fi
+
+docker build -t "$DOCKER_IMAGE" -f workloads/$TARGET/Dockerfile --build-arg SCENARIO=$SCENARIO .
 
 # Validate AFL++ path
 if [ ! -d "$AFLPP_PATH/nyx_mode/packer/packer" ]; then
@@ -71,8 +110,6 @@ cp "$BINARIES_PATH"/* "$SHAREDIR/"
 # which breaks the packer's common/debug.py. We force 'fork' via a
 # sitecustomize.py injected on PYTHONPATH to restore the pre-3.14 behavior.
 echo "Generating Nyx config..."
-FORCE_FORK_DIR="$(mktemp -d)"
-trap 'rm -rf "$FORCE_FORK_DIR"' EXIT
 cat > "$FORCE_FORK_DIR/sitecustomize.py" <<'EOF'
 import multiprocessing
 multiprocessing.set_start_method("fork", force=True)
@@ -114,6 +151,18 @@ cat rootfs/init.log | ./hcat
 ./habort "$(tail rootfs/init.log)"
 EOF
 chmod +x "$SHAREDIR/fuzz_no_pt.sh"
+
+# In debug mode, stream the target's chroot stdout live via hcat. This is the
+# excluded setup-nyx.sh hunk of target_debug.patch, applied to the generated
+# file instead of this running script.
+if [ "$DEBUG" = 1 ]; then
+    sed -i 's#^chroot /tmp/rootfs /init.sh$#chroot /tmp/rootfs /init.sh | ./hcat#' "$SHAREDIR/fuzz_no_pt.sh"
+    echo "~~~               debug mode               ~~~"
+    echo "~~~ replaced                               ~~~"
+    echo "~~~   chroot /tmp/rootfs /init.sh          ~~~"
+    echo "~~~ with                                   ~~~"
+    echo "~~~   chroot /tmp/rootfs /init.sh | ./hcat ~~~"
+fi
 
 echo ""
 echo "Sharedir created successfully at: $SHAREDIR"
