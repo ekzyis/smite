@@ -107,7 +107,7 @@ pub struct CommitmentState {
     pub opener: CommitmentPartyState,
     /// Parameters for the channel acceptor.
     pub acceptor: CommitmentPartyState,
-    // TODO: When adding HTLC support, store pending HTLCs (offered/received) for both sides
+    // TODO(htlc): When adding HTLC support, store pending HTLCs (offered/received) for both sides
     // to correctly compute balances and construct HTLC outputs in the commitment transaction.
 }
 
@@ -473,7 +473,7 @@ impl CommitmentState {
         }
     }
 
-    // TODO: When adding HTLC support, add `get_next_commitment_state` to build the next
+    // TODO(htlc): When adding HTLC support, add `get_next_commitment_state` to build the next
     // commitment state based on the previous state and the HTLCs claimed by both sides.
 }
 
