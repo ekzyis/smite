@@ -137,6 +137,10 @@ pub struct ProgramContext {
     /// Current block height at snapshot time.
     pub block_height: u32,
     /// Features negotiated between the target node and Smite.
+    ///
+    /// A feature may appear in either its required (even) or optional (odd)
+    /// form; the distinction carries no meaning here, so query it through
+    /// `supports_feature` rather than testing bits directly.
     pub negotiated_features: Features,
 }
 
