@@ -9,17 +9,21 @@ use crate::violation::Violation;
 pub struct ShutdownContext<'a> {
     /// The `shutdown` received from the peer.
     pub shutdown: &'a Shutdown,
+    /// The `shutdown` we sent, which the received one answers.
+    pub sent: &'a Shutdown,
     /// The channel the `shutdown` belongs to, identified by its `channel_id`,
     /// or `None` if no such channel was established.
     pub channel: Option<&'a ChannelState>,
     /// Features negotiated between the target node and Smite, which decide the
-    /// standard `scriptpubkey` forms.
+    /// standard `scriptpubkey` forms and whether `upfront_shutdown_script`s are
+    /// binding.
     pub negotiated_features: &'a Features,
 }
 
 /// Checks that a received `shutdown` references a channel we know, answers a
 /// `shutdown` the target was allowed to answer, and carries a `scriptpubkey`
-/// that is a standard form for the negotiated features.
+/// that matches the peer's committed `upfront_shutdown_script` and is a
+/// standard form for the negotiated features.
 pub struct ShutdownOracle;
 
 impl Oracle<ShutdownContext<'_>> for ShutdownOracle {
@@ -43,6 +47,44 @@ impl Oracle<ShutdownContext<'_>> for ShutdownOracle {
             return Err(Violation::InvalidShutdown(
                 *channel_id,
                 "replied on a failed channel: we sent an invalid signature".to_string(),
+            ));
+        }
+
+        // Check that the target did not respond to a `shutdown` breaking our own
+        // upfront commitment, since it must then fail the connection.
+        if !channel.verify_holder_upfront_shutdown_script(
+            &context.sent.scriptpubkey,
+            context.negotiated_features,
+        ) {
+            return Err(Violation::InvalidShutdown(
+                *channel_id,
+                format!(
+                    "replied to a shutdown breaking our upfront_shutdown_script: sent {}, committed to {}",
+                    hex::encode(&context.sent.scriptpubkey),
+                    hex::encode(
+                        channel
+                            .holder_upfront_shutdown_script
+                            .as_deref()
+                            .unwrap_or_default()
+                    ),
+                ),
+            ));
+        }
+
+        // Check that the target kept its own upfront commitment.
+        if !channel.verify_counterparty_upfront_shutdown_script(scriptpubkey) {
+            return Err(Violation::InvalidShutdown(
+                *channel_id,
+                format!(
+                    "upfront_shutdown_script mismatch: sent {}, committed to {}",
+                    hex::encode(scriptpubkey),
+                    hex::encode(
+                        channel
+                            .counterparty_upfront_shutdown_script
+                            .as_deref()
+                            .unwrap_or_default()
+                    ),
+                ),
             ));
         }
 
@@ -83,8 +125,8 @@ mod tests {
         PublicKey::from_secret_key(&Secp256k1::new(), &secret_key(seed))
     }
 
-    /// Valid channel state for testing.
-    fn channel_state() -> ChannelState {
+    /// Valid channel state for testing, with the peer committed to `upfront`.
+    fn channel_state(upfront: Option<Vec<u8>>) -> ChannelState {
         let pkey1 = pubkey(1);
         let pkey2 = pubkey(2);
 
@@ -123,7 +165,9 @@ mod tests {
             funding_privkey: secret_key(1),
         };
 
-        ChannelState::new(config, holder, commitment, true, false, false)
+        ChannelState::new(
+            config, holder, commitment, true, false, false, None, upfront,
+        )
     }
 
     fn p2pkh() -> Vec<u8> {
@@ -155,10 +199,21 @@ mod tests {
         Shutdown::for_channel(ChannelId::new([0x7a; 32]), scriptpubkey)
     }
 
+    /// The `shutdown` we sent, unless a test needs a specific one.
+    fn sent() -> Shutdown {
+        shutdown(p2wpkh(0x55))
+    }
+
     #[track_caller]
-    fn assert_pass(shutdown: &Shutdown, channel: Option<&ChannelState>, features: &Features) {
+    fn assert_pass(
+        shutdown: &Shutdown,
+        sent: &Shutdown,
+        channel: Option<&ChannelState>,
+        features: &Features,
+    ) {
         if let Err(err) = ShutdownOracle.evaluate(&ShutdownContext {
             shutdown,
+            sent,
             channel,
             negotiated_features: features,
         }) {
@@ -169,12 +224,14 @@ mod tests {
     #[track_caller]
     fn assert_fail(
         shutdown: &Shutdown,
+        sent: &Shutdown,
         channel: Option<&ChannelState>,
         features: &Features,
         expected: &str,
     ) {
         match ShutdownOracle.evaluate(&ShutdownContext {
             shutdown,
+            sent,
             channel,
             negotiated_features: features,
         }) {
@@ -193,7 +250,8 @@ mod tests {
     fn conforming_shutdown_passes() {
         assert_pass(
             &shutdown(p2wpkh(0x33)),
-            Some(&channel_state()),
+            &sent(),
+            Some(&channel_state(None)),
             &Features::new(),
         );
     }
@@ -202,6 +260,7 @@ mod tests {
     fn shutdown_for_unknown_channel_id() {
         assert_fail(
             &shutdown(p2wpkh(0x33)),
+            &sent(),
             None,
             &Features::new(),
             "unknown channel_id: no channel was established for this channel",
@@ -210,11 +269,12 @@ mod tests {
 
     #[test]
     fn shutdown_after_invalid_signature() {
-        let mut channel = channel_state();
+        let mut channel = channel_state(None);
         channel.sent_invalid_signature = true;
 
         assert_fail(
             &shutdown(p2wpkh(0x33)),
+            &sent(),
             Some(&channel),
             &Features::new(),
             "replied on a failed channel: we sent an invalid signature",
@@ -225,7 +285,8 @@ mod tests {
     fn shutdown_with_non_standard_script() {
         assert_fail(
             &shutdown(p2pkh()),
-            Some(&channel_state()),
+            &sent(),
+            Some(&channel_state(None)),
             &Features::new(),
             &format!("non-standard scriptpubkey: {}", hex::encode(p2pkh())),
         );
@@ -233,7 +294,7 @@ mod tests {
 
     #[test]
     fn shutdown_script_standard_only_with_negotiated_feature() {
-        let channel = channel_state();
+        let channel = channel_state(None);
 
         for (spk, feature) in [
             (anysegwit(), Features::OPTION_SHUTDOWN_ANYSEGWIT),
@@ -241,15 +302,121 @@ mod tests {
         ] {
             assert_fail(
                 &shutdown(spk.clone()),
+                &sent(),
                 Some(&channel),
                 &Features::new(),
                 "non-standard scriptpubkey",
             );
             assert_pass(
                 &shutdown(spk),
+                &sent(),
                 Some(&channel),
                 &Features::from_bits(&[feature]),
             );
         }
+    }
+
+    #[test]
+    fn shutdown_matching_upfront_script_passes() {
+        assert_pass(
+            &shutdown(p2wpkh(0x33)),
+            &sent(),
+            Some(&channel_state(Some(p2wpkh(0x33)))),
+            &Features::new(),
+        );
+    }
+
+    #[test]
+    fn shutdown_mismatching_upfront_script() {
+        assert_fail(
+            &shutdown(p2wpkh(0x44)),
+            &sent(),
+            Some(&channel_state(Some(p2wpkh(0x33)))),
+            &Features::new(),
+            &format!(
+                "upfront_shutdown_script mismatch: sent {}, committed to {}",
+                hex::encode(p2wpkh(0x44)),
+                hex::encode(p2wpkh(0x33)),
+            ),
+        );
+    }
+
+    #[test]
+    fn shutdown_with_empty_upfront_script_requires_standard_script() {
+        let channel = channel_state(Some(Vec::new()));
+
+        assert_pass(
+            &shutdown(p2wpkh(0x33)),
+            &sent(),
+            Some(&channel),
+            &Features::new(),
+        );
+        assert_fail(
+            &shutdown(p2pkh()),
+            &sent(),
+            Some(&channel),
+            &Features::new(),
+            "non-standard scriptpubkey",
+        );
+    }
+
+    /// A channel where we committed to `p2wpkh(0x55)` as our
+    /// `upfront_shutdown_script`.
+    fn holder_committed_channel() -> ChannelState {
+        let mut channel = channel_state(None);
+        channel.holder_upfront_shutdown_script = Some(p2wpkh(0x55));
+        channel
+    }
+
+    fn upfront_feature() -> Features {
+        Features::from_bits(&[Features::OPTION_UPFRONT_SHUTDOWN_SCRIPT])
+    }
+
+    #[test]
+    fn shutdown_answering_our_mismatched_upfront_script() {
+        assert_fail(
+            &shutdown(p2wpkh(0x33)),
+            &shutdown(p2wpkh(0x66)),
+            Some(&holder_committed_channel()),
+            &upfront_feature(),
+            &format!(
+                "replied to a shutdown breaking our upfront_shutdown_script: sent {}, committed to {}",
+                hex::encode(p2wpkh(0x66)),
+                hex::encode(p2wpkh(0x55)),
+            ),
+        );
+    }
+
+    #[test]
+    fn shutdown_answering_our_matching_upfront_script_passes() {
+        assert_pass(
+            &shutdown(p2wpkh(0x33)),
+            &shutdown(p2wpkh(0x55)),
+            Some(&holder_committed_channel()),
+            &upfront_feature(),
+        );
+    }
+
+    #[test]
+    fn shutdown_answering_our_mismatched_upfront_script_without_feature_passes() {
+        assert_pass(
+            &shutdown(p2wpkh(0x33)),
+            &shutdown(p2wpkh(0x66)),
+            Some(&holder_committed_channel()),
+            &Features::new(),
+        );
+    }
+
+    #[test]
+    fn shutdown_answering_our_empty_upfront_script_passes() {
+        let mut channel = channel_state(None);
+        channel.holder_upfront_shutdown_script = Some(Vec::new());
+
+        assert_pass(
+            &shutdown(p2wpkh(0x33)),
+            &shutdown(p2wpkh(0x66)),
+            Some(&channel),
+            &upfront_feature(),
+        );
     }
 }

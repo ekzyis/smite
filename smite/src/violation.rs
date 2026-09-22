@@ -55,7 +55,11 @@ pub enum Violation {
     /// [`crate::oracles::ShutdownOracle`]. The reason names the breached
     /// requirement, one of:
     /// - it names a `channel_id` we never established,
-    /// - it answers on a channel we sent an invalid signature for, or
+    /// - it answers on a channel we sent an invalid signature for,
+    /// - it answers a `shutdown` whose `scriptpubkey` differs from the
+    ///   `upfront_shutdown_script` we committed to in our `open_channel`,
+    /// - its `scriptpubkey` differs from the `upfront_shutdown_script` the
+    ///   target committed to in its `accept_channel`, or
     /// - its `scriptpubkey` is not a form BOLT 2 permits a sender to use for the
     ///   negotiated features.
     #[error("invalid shutdown for channel_id {0}: {1}")]

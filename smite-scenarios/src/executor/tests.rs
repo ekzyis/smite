@@ -1420,6 +1420,125 @@ fn execute_recv_shutdown_warning_for_other_channel() {
     ));
 }
 
+/// A [`recv_channel_ready_fixture`] with `option_upfront_shutdown_script`
+/// negotiated, where we committed to `script` as our `upfront_shutdown_script`.
+fn holder_upfront_shutdown_script_fixture(script: Vec<u8>) -> Fixture {
+    let mut negotiation = sample_funding_negotiation();
+    negotiation.open_channel.tlvs.upfront_shutdown_script = Some(script);
+
+    Fixture::new()
+        .with_negotiated_feature(Features::OPTION_UPFRONT_SHUTDOWN_SCRIPT)
+        .with_negotiation(negotiation)
+        .queue(&funding_signed_reply(funding_channel_id()))
+        .queue(&channel_ready_reply(sample_pubkey(1)))
+}
+
+#[test]
+fn execute_recv_shutdown_warning_for_our_mismatched_upfront_script() {
+    let channel_id = funding_channel_id();
+    // We break our own upfront commitment, so the target may warn before
+    // failing the connection.
+    let mut fx =
+        holder_upfront_shutdown_script_fixture(ShutdownScriptVariant::P2wpkh([0x55; 20]).encode())
+            .queue(&warning_reply(channel_id));
+
+    fx.run(&recv_shutdown_program(
+        channel_id,
+        ShutdownScriptVariant::P2wpkh([0x66; 20]),
+    ));
+
+    assert!(!fx.channel_state(&channel_id).counterparty_shutdown_received);
+    assert_eq!(fx.queued_len(), 0);
+}
+
+#[test]
+fn execute_recv_shutdown_after_our_mismatched_upfront_script() {
+    let channel_id = funding_channel_id();
+    let committed = ShutdownScriptVariant::P2wpkh([0x55; 20]).encode();
+
+    // We break our own upfront commitment, so the target must fail the
+    // connection rather than answer.
+    let mut fx = holder_upfront_shutdown_script_fixture(committed.clone()).queue(
+        &Message::Shutdown(Shutdown::for_channel(
+            channel_id,
+            ShutdownScriptVariant::P2wpkh([0xab; 20]).encode(),
+        )),
+    );
+
+    let err = fx.run_err(&recv_shutdown_program(
+        channel_id,
+        ShutdownScriptVariant::P2wpkh([0x66; 20]),
+    ));
+
+    assert_eq!(
+        fx.channel_state(&channel_id).holder_upfront_shutdown_script,
+        Some(committed)
+    );
+    let ExecuteError::Violation(Violation::InvalidShutdown(id, reason)) = &err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert_eq!(*id, channel_id);
+    assert!(reason.contains("replied to a shutdown breaking our upfront_shutdown_script"));
+}
+
+/// A [`recv_channel_ready_fixture`] whose peer committed to `script` as its
+/// `upfront_shutdown_script`, so the established channel carries it.
+fn upfront_shutdown_script_fixture(script: Vec<u8>) -> Fixture {
+    let mut negotiation = sample_funding_negotiation();
+    negotiation
+        .accept_channel
+        .as_mut()
+        .expect("accept_channel must be present")
+        .tlvs
+        .upfront_shutdown_script = Some(script);
+
+    Fixture::new()
+        .with_negotiation(negotiation)
+        .queue(&funding_signed_reply(funding_channel_id()))
+        .queue(&channel_ready_reply(sample_pubkey(1)))
+}
+
+#[test]
+fn execute_recv_shutdown_matches_upfront_script() {
+    let channel_id = funding_channel_id();
+    let script = ShutdownScriptVariant::P2wpkh([0xab; 20]);
+    let committed = script.encode();
+    let mut fx = upfront_shutdown_script_fixture(committed.clone()).queue(&Message::Shutdown(
+        Shutdown::for_channel(channel_id, committed),
+    ));
+
+    fx.run(&recv_shutdown_program(channel_id, script));
+
+    assert!(fx.channel_state(&channel_id).counterparty_shutdown_received);
+    assert_eq!(fx.queued_len(), 0);
+}
+
+#[test]
+fn execute_recv_shutdown_mismatched_upfront_script() {
+    let channel_id = funding_channel_id();
+    // The target replies with a different (still standard) script than the one
+    // it committed to.
+    let other = ShutdownScriptVariant::P2wpkh([0xcd; 20]).encode();
+    let mut fx =
+        upfront_shutdown_script_fixture(ShutdownScriptVariant::P2wpkh([0xab; 20]).encode()).queue(
+            &Message::Shutdown(Shutdown::for_channel(channel_id, other.clone())),
+        );
+
+    let err = fx.run_err(&recv_shutdown_program(
+        channel_id,
+        ShutdownScriptVariant::P2wpkh([0x11; 20]),
+    ));
+
+    let ExecuteError::Violation(Violation::InvalidShutdown(id, reason)) = &err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert_eq!(*id, channel_id);
+    assert!(reason.contains(&format!(
+        "upfront_shutdown_script mismatch: sent {}",
+        hex::encode(&other)
+    )));
+}
+
 #[test]
 fn execute_recv_channel_ready_invalid_funding_outpoint_is_noop() {
     // Corrupt the negotiated acceptor funding pubkey so the broadcast funding
