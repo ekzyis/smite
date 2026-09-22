@@ -566,6 +566,7 @@ impl<C: Connection, B: BitcoinRpc, R: TargetRpc> Executor<C, B, R> {
                         Some(sd) => {
                             ShutdownOracle.evaluate(&ShutdownContext {
                                 shutdown: &sd,
+                                sent: &sent,
                                 channel: self.channel_states.get(&sd.channel_id),
                                 negotiated_features: &self.context.negotiated_features,
                             })?;
@@ -940,6 +941,8 @@ fn build_funding_created(
                 is_funding_outpoint_valid,
                 mined_txids.contains(&funding_outpoint.txid),
                 sent_invalid_signature,
+                open_channel.tlvs.upfront_shutdown_script.clone(),
+                accept_channel.tlvs.upfront_shutdown_script.clone(),
             )
         });
     }
@@ -1309,7 +1312,7 @@ fn is_shutdown_expected(
 
 /// Receives the target's reply to our `shutdown`, or `None` if it sent a
 /// `warning` for our channel instead, which BOLT 2 allows when our
-/// `scriptpubkey` is non-standard.
+/// `scriptpubkey` is non-standard or breaks our `upfront_shutdown_script`.
 ///
 /// A `shutdown` for an untracked channel is returned for the oracle to flag.
 ///
@@ -1325,7 +1328,9 @@ fn recv_shutdown_reply(
     channel_states: &HashMap<ChannelId, ChannelState>,
     negotiated_features: &Features,
 ) -> Result<Option<Shutdown>, ExecuteError> {
-    let may_warn = !is_standard_shutdown_script(&sent.scriptpubkey, negotiated_features);
+    let channel = &channel_states[&sent.channel_id];
+    let may_warn = !is_standard_shutdown_script(&sent.scriptpubkey, negotiated_features)
+        || !channel.verify_holder_upfront_shutdown_script(&sent.scriptpubkey, negotiated_features);
     match recv_non_ping(conn, RECV_IDLE_TIMEOUT)? {
         Message::Shutdown(sd)
             if sd.channel_id == sent.channel_id || !channel_states.contains_key(&sd.channel_id) =>
