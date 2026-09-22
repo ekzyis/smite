@@ -20,6 +20,7 @@ use smite::channel_tx::{
 use smite::noise::{ConnectionError, NoiseConnection};
 use smite::oracles::{
     AcceptChannelContext, AcceptChannelOracle, FundingSignedContext, FundingSignedOracle, Oracle,
+    ShutdownContext, ShutdownOracle,
 };
 use smite::pending_channel::PendingChannel;
 use smite::violation::Violation;
@@ -553,6 +554,7 @@ impl<C: Connection, B: BitcoinRpc, R: TargetRpc> Executor<C, B, R> {
                         let reply = recv_shutdown_reply(
                             &mut self.conn,
                             &sent,
+                            &self.channel_states,
                             &self.context.negotiated_features,
                         )?;
                         log::debug!("[{:?}] RecvShutdown: received", start.elapsed());
@@ -562,6 +564,11 @@ impl<C: Connection, B: BitcoinRpc, R: TargetRpc> Executor<C, B, R> {
                     };
                     match reply {
                         Some(sd) => {
+                            ShutdownOracle.evaluate(&ShutdownContext {
+                                shutdown: &sd,
+                                channel: self.channel_states.get(&sd.channel_id),
+                                negotiated_features: &self.context.negotiated_features,
+                            })?;
                             self.channel_states
                                 .get_mut(&sent.channel_id)
                                 .expect("is_shutdown_expected guarantees a tracked channel")
@@ -1304,20 +1311,27 @@ fn is_shutdown_expected(
 /// `warning` for our channel instead, which BOLT 2 allows when our
 /// `scriptpubkey` is non-standard.
 ///
+/// A `shutdown` for an untracked channel is returned for the oracle to flag.
+///
 /// # Errors
 ///
 /// Returns [`ExecuteError::UnexpectedMessage`] if the received message is
 /// neither a `shutdown` nor such a `warning`, or is a `shutdown` for another
-/// channel. That may answer a `shutdown` we sent there earlier, which we can't
-/// check against the `shutdown` we sent on this channel.
+/// tracked channel. That may answer a `shutdown` we sent there earlier, which
+/// we can't check against the `shutdown` we sent on this channel.
 fn recv_shutdown_reply(
     conn: &mut impl Connection,
     sent: &Shutdown,
+    channel_states: &HashMap<ChannelId, ChannelState>,
     negotiated_features: &Features,
 ) -> Result<Option<Shutdown>, ExecuteError> {
     let may_warn = !is_standard_shutdown_script(&sent.scriptpubkey, negotiated_features);
     match recv_non_ping(conn, RECV_IDLE_TIMEOUT)? {
-        Message::Shutdown(sd) if sd.channel_id == sent.channel_id => Ok(Some(sd)),
+        Message::Shutdown(sd)
+            if sd.channel_id == sent.channel_id || !channel_states.contains_key(&sd.channel_id) =>
+        {
+            Ok(Some(sd))
+        }
         Message::Shutdown(sd) => {
             log::debug!(
                 "received shutdown on {} while waiting on {}",
