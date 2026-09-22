@@ -1139,6 +1139,25 @@ fn execute_recv_shutdown() {
 }
 
 #[test]
+fn execute_recv_shutdown_unknown_channel() {
+    let (fx, _) = recv_channel_ready_fixture();
+    let unknown = ChannelId::new([0x7a; 32]);
+    let script = ShutdownScriptVariant::P2wpkh([0xcd; 20]);
+    let mut fx = fx.queue(&Message::Shutdown(Shutdown::for_channel(
+        unknown,
+        script.encode(),
+    )));
+
+    let err = fx.run_err(&recv_shutdown_program(funding_channel_id(), script));
+
+    let ExecuteError::Violation(Violation::InvalidShutdown(id, reason)) = &err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert_eq!(*id, unknown);
+    assert!(reason.contains("unknown channel_id: no channel was established for this channel"));
+}
+
+#[test]
 fn execute_recv_shutdown_other_tracked_channel() {
     let channel_id = funding_channel_id();
     let second_utxo = Utxo {
@@ -1201,6 +1220,36 @@ fn execute_recv_shutdown_other_tracked_channel() {
 }
 
 #[test]
+fn execute_recv_shutdown_non_standard_script() {
+    let (fx, _) = recv_channel_ready_fixture();
+    let channel_id = funding_channel_id();
+    // Legacy P2PKH is never a standard script for a sender, even for a
+    // channel we know and even with every shutdown feature negotiated.
+    let non_standard = ShutdownScriptVariant::P2pkh([0x11; 20]).encode();
+    let mut fx = fx
+        .with_negotiated_feature(Features::OPTION_SHUTDOWN_ANYSEGWIT)
+        .with_negotiated_feature(Features::OPTION_SIMPLE_CLOSE)
+        .queue(&Message::Shutdown(Shutdown::for_channel(
+            channel_id,
+            non_standard.clone(),
+        )));
+
+    let err = fx.run_err(&recv_shutdown_program(
+        channel_id,
+        ShutdownScriptVariant::P2wpkh([0xab; 20]),
+    ));
+
+    let ExecuteError::Violation(Violation::InvalidShutdown(id, reason)) = &err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert_eq!(*id, channel_id);
+    assert!(reason.contains(&format!(
+        "non-standard scriptpubkey: {}",
+        hex::encode(&non_standard)
+    )));
+}
+
+#[test]
 fn execute_recv_shutdown_after_response_is_noop() {
     let (fx, _) = recv_channel_ready_fixture();
     let channel_id = funding_channel_id();
@@ -1240,6 +1289,37 @@ fn execute_recv_shutdown_untracked_channel_is_noop() {
     ));
 
     assert_eq!(fx.queued_len(), 0);
+}
+
+#[test]
+fn execute_recv_shutdown_after_invalid_signature() {
+    let channel_id = funding_channel_id();
+    let script = ShutdownScriptVariant::P2wpkh([0xab; 20]);
+    let mut b = ProgramBuilder::new();
+    let funding = create_funding_tx(&mut b);
+    b.append(Operation::BroadcastTransaction, &[funding.tx]);
+    // Sign the commitment with the acceptor's private key instead of the
+    // opener's, so the signature does not match the `funding_pubkey` negotiated
+    // in `open_channel`.
+    send_funding_created_with(&mut b, funding, funding.acceptor_privkey);
+    let shutdown = send_shutdown(&mut b, channel_id, script.clone());
+    b.append(Operation::RecvShutdown, &[shutdown.sent]);
+
+    // Having signed with the wrong key, the target must fail the channel, so
+    // answering our `shutdown` is a violation.
+    let err = Fixture::new()
+        .with_negotiation(sample_funding_negotiation())
+        .queue(&Message::Shutdown(Shutdown::for_channel(
+            channel_id,
+            script.encode(),
+        )))
+        .run_err(&b.build());
+
+    let ExecuteError::Violation(Violation::InvalidShutdown(id, reason)) = &err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert_eq!(*id, channel_id);
+    assert!(reason.contains("replied on a failed channel: we sent an invalid signature"));
 }
 
 fn warning_reply(channel_id: ChannelId) -> Message {
