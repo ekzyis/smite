@@ -1431,7 +1431,7 @@ fn execute_recv_channel_ready_resend_with_new_alias() {
     // Instead of a `channel_ready` for the second channel, the target resends
     // the first channel's with a different alias but otherwise identical
     // contents.
-    let mut fx = two_funding_negotiations_fixture()
+    let mut fx = recv_two_accept_channel_fixture()
         .queue(&channel_ready_reply(target_pcp))
         .queue(&Message::ChannelReady(ChannelReady {
             channel_id: funding_channel_id(),
@@ -1456,7 +1456,7 @@ fn execute_recv_channel_ready_rejects_alias_reused_by_another_channel() {
     // The second channel's `channel_ready` advertises the alias the first
     // channel already advertised.
     let alias = ShortChannelId::from_u64(42);
-    let err = two_funding_negotiations_fixture()
+    let err = recv_two_accept_channel_fixture()
         .queue(&Message::ChannelReady(ChannelReady {
             channel_id: funding_channel_id(),
             second_per_commitment_point: sample_pubkey(7),
@@ -1488,7 +1488,7 @@ fn execute_recv_channel_ready_rejects_alias_matching_another_channels_scid() {
     // The second channel advertises an alias matching the first channel's real
     // short channel ID.
     let alias = FUNDING_SCID;
-    let err = two_funding_negotiations_fixture()
+    let err = recv_two_accept_channel_fixture()
         .queue(&Message::ChannelReady(ChannelReady {
             channel_id: funding_channel_id(),
             second_per_commitment_point: sample_pubkey(7),
