@@ -1054,6 +1054,8 @@ fn build_funding_created(
                 is_funding_outpoint_valid,
                 mined_txids.contains(&funding_outpoint.txid),
                 sent_invalid_signature,
+                open_channel.tlvs.upfront_shutdown_script.clone(),
+                accept_channel.tlvs.upfront_shutdown_script.clone(),
             )
         });
     }
