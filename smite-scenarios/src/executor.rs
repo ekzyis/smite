@@ -21,7 +21,7 @@ use smite::channel_tx::{
 use smite::noise::{ConnectionError, NoiseConnection};
 use smite::oracles::{
     AcceptChannelContext, AcceptChannelOracle, ChannelReadyContext, ChannelReadyOracle,
-    FundingSignedContext, FundingSignedOracle, Oracle,
+    FundingSignedContext, FundingSignedOracle, Oracle, ShutdownContext, ShutdownOracle,
 };
 use smite::pending_channel::{KeyOrigin, PendingChannel};
 use smite::violation::Violation;
@@ -737,8 +737,11 @@ impl<C: Connection, B: BitcoinRpc, R: TargetRpc> Executor<C, B, R> {
             }
             Message::Shutdown(sd) => {
                 log::debug!("received shutdown on {}", sd.channel_id);
-                // TODO: judge it with a `shutdown` oracle here, starting with one naming a
-                // channel we never funded.
+                ShutdownOracle.evaluate(&ShutdownContext {
+                    shutdown: sd,
+                    channel: self.channel_states.get(&sd.channel_id),
+                    negotiated_features: &self.context.negotiated_features,
+                })?;
                 record_recv_shutdown(&mut self.channel_states, sd);
                 Ok(true)
             }
