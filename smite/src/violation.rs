@@ -50,7 +50,7 @@ pub enum Violation {
     /// The target's `channel_ready` broke a BOLT 2 requirement, as judged by
     /// [`crate::oracles::ChannelReadyOracle`]. The reason names the breached
     /// requirement, one of:
-    /// - it names a `channel_id` we have not funded,
+    /// - it names a `channel_id` we have no channel tracked for,
     /// - its funding output does not match the negotiated funding script and
     ///   amount,
     /// - it arrives before the funding transaction reached `minimum_depth`,
