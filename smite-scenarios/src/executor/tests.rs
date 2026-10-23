@@ -1620,7 +1620,7 @@ fn execute_recv_implicit_channel_ready_unknown_channel() {
         panic!("unexpected error: {err:?}");
     };
     assert_eq!(*id, funding_channel_id());
-    assert!(reason.contains("unknown channel_id: no channel was funded for it"));
+    assert!(reason.contains("unknown channel_id: no channel is tracked for it"));
 }
 
 #[test]

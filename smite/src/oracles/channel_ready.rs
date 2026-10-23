@@ -14,7 +14,7 @@ pub struct ChannelReadyContext<'a> {
     /// The `channel_ready` received from the peer.
     pub channel_ready: &'a ChannelReady,
     /// The channel the `channel_ready` belongs to, identified by its
-    /// `channel_id`, or `None` if no channel was funded for it.
+    /// `channel_id`, or `None` if no channel is tracked for it.
     pub channel: Option<&'a ChannelState>,
     /// Features negotiated between the target node and Smite.
     pub negotiated_features: &'a Features,
@@ -35,11 +35,11 @@ pub struct ChannelReadyOracle;
 
 impl Oracle<ChannelReadyContext<'_>> for ChannelReadyOracle {
     fn evaluate(&self, context: &ChannelReadyContext<'_>) -> Result<(), Violation> {
-        // Check that the `channel_ready` answers a channel we funded.
+        // Check that the `channel_ready` answers a channel we track.
         let Some(channel) = context.channel else {
             return Err(Violation::InvalidChannelReady(
                 context.channel_ready.channel_id,
-                "unknown channel_id: no channel was funded for it".to_string(),
+                "unknown channel_id: no channel is tracked for it".to_string(),
             ));
         };
 
@@ -197,7 +197,7 @@ mod tests {
     }
 
     /// Oracle inputs for testing. Defaults to a conforming `channel_ready`
-    /// for a funded channel at the minimum depth.
+    /// for a tracked channel at the minimum depth.
     struct OracleInputs {
         channel_ready: ChannelReady,
         channel: Option<ChannelState>,
@@ -233,7 +233,7 @@ mod tests {
         }
 
         fn channel_mut(&mut self) -> &mut ChannelState {
-            self.channel.as_mut().expect("funded channel")
+            self.channel.as_mut().expect("tracked channel")
         }
     }
 
@@ -270,7 +270,7 @@ mod tests {
             ..OracleInputs::default()
         };
 
-        assert_fail(&inputs, "unknown channel_id: no channel was funded for it");
+        assert_fail(&inputs, "unknown channel_id: no channel is tracked for it");
     }
 
     #[test]
