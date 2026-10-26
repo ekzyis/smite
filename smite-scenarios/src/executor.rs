@@ -15,8 +15,7 @@ use smite::bolt::{
 };
 use smite::channel_state::ChannelState;
 use smite::channel_tx::{
-    ChannelConfig, ChannelPartyConfig, FundingTransaction, HolderIdentity, Side,
-    build_funding_transaction,
+    ChannelConfig, FundingTransaction, HolderIdentity, Side, build_funding_transaction,
 };
 use smite::noise::{ConnectionError, NoiseConnection};
 use smite::oracles::{
@@ -898,7 +897,6 @@ fn build_open_channel(variables: &[Option<Variable>], inputs: &[usize]) -> OpenC
 /// This should be unreachable: the commitments are only built once the
 /// negotiation has an `accept_channel`, which is only recorded after
 /// `AcceptChannelOracle` has validated the `open_channel` parameters.
-#[allow(clippy::too_many_lines)]
 fn build_funding_created(
     variables: &[Option<Variable>],
     inputs: &[usize],
@@ -946,41 +944,9 @@ fn build_funding_created(
     let opener_htlc_basepoint_privkey =
         SecretKey::from_slice(&opener_htlc_basepoint_privkey_bytes).expect("valid private key");
 
-    let opener = ChannelPartyConfig {
-        funding_pubkey: open_channel.funding_pubkey,
-        payment_basepoint: open_channel.payment_basepoint,
-        revocation_basepoint: open_channel.revocation_basepoint,
-        delayed_payment_basepoint: open_channel.delayed_payment_basepoint,
-        htlc_basepoint: open_channel.htlc_basepoint,
-        dust_limit_satoshis: open_channel.dust_limit_satoshis,
-        to_self_delay: open_channel.to_self_delay,
-    };
-    let acceptor = ChannelPartyConfig {
-        funding_pubkey: accept_channel.funding_pubkey,
-        payment_basepoint: accept_channel.payment_basepoint,
-        revocation_basepoint: accept_channel.revocation_basepoint,
-        delayed_payment_basepoint: accept_channel.delayed_payment_basepoint,
-        htlc_basepoint: accept_channel.htlc_basepoint,
-        dust_limit_satoshis: accept_channel.dust_limit_satoshis,
-        to_self_delay: accept_channel.to_self_delay,
-    };
-    let config = ChannelConfig {
-        funding_outpoint,
-        funding_satoshis: open_channel.funding_satoshis,
-        channel_type: Features::from(open_channel.tlvs.channel_type.clone().unwrap_or_default()),
-        opener,
-        acceptor,
-        minimum_depth: accept_channel.minimum_depth,
-    };
-
-    let commitments = config
-        .new_initial_commitments(
-            open_channel.push_msat,
-            open_channel.feerate_per_kw,
-            open_channel.first_per_commitment_point,
-            accept_channel.first_per_commitment_point,
-        )
-        .expect("valid initial commitment amounts");
+    let (config, commitments) =
+        ChannelConfig::from_negotiation(open_channel, accept_channel, funding_outpoint)
+            .expect("valid initial commitment amounts");
     let holder = HolderIdentity {
         side: Side::Opener,
         funding_privkey: opener_funding_privkey,

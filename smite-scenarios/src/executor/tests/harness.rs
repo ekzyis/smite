@@ -436,18 +436,37 @@ pub fn funding_channel_id() -> ChannelId {
     ChannelId::v1_from_funding_outpoint(funding_outpoint())
 }
 
-/// The acceptor's `funding_signed` for `channel_id`.
-///
-/// The signature was computed by LDK over this fixture's commitment, so the
-/// executor accepting it shows both implementations built the same commitment
-/// transaction.
-pub fn funding_signed_reply(channel_id: ChannelId) -> Message {
-    Message::FundingSigned(FundingSigned {
-        channel_id,
-        signature: "304402203dbf3dbf337b042a72576488c1fb019086089d8d790a47f652346cff2511b6e70220395fdf700cb82b0abfcfe8e0b7c822181f2ee72409c82c3ff8e04e36593662c7"
-            .parse()
-            .expect("valid DER signature"),
-    })
+/// The acceptor's `funding_signed` for the channel `open_channel` and
+/// `accept_channel` negotiate at `funding_outpoint`, signed with
+/// [`acceptor_funding_sk`].
+pub fn funding_signed_for(
+    open_channel: &OpenChannel,
+    accept_channel: &AcceptChannel,
+    funding_outpoint: OutPoint,
+) -> FundingSigned {
+    let (config, commitments) =
+        ChannelConfig::from_negotiation(open_channel, accept_channel, funding_outpoint)
+            .expect("valid initial commitments");
+
+    let acceptor = HolderIdentity {
+        side: Side::Acceptor,
+        funding_privkey: acceptor_funding_sk(),
+        htlc_basepoint_privkey: acceptor_funding_sk(),
+    };
+
+    FundingSigned {
+        channel_id: ChannelId::v1_from_funding_outpoint(funding_outpoint),
+        signature: config.sign_counterparty_commitment(&commitments, &acceptor),
+    }
+}
+
+/// The acceptor's `funding_signed` for the funding flow's channel.
+pub fn funding_signed_reply() -> Message {
+    Message::FundingSigned(funding_signed_for(
+        &funded_open_channel().message,
+        &funded_accept_channel(),
+        funding_outpoint(),
+    ))
 }
 
 /// The target's `channel_ready` for the funding flow's channel.
@@ -464,7 +483,7 @@ pub fn channel_ready_reply(second_per_commitment_point: PublicKey) -> Message {
 pub fn recv_funding_signed_fixture() -> Fixture {
     Fixture::new()
         .queue(&Message::AcceptChannel(funded_accept_channel()))
-        .queue(&funding_signed_reply(funding_channel_id()))
+        .queue(&funding_signed_reply())
 }
 
 /// A [`recv_funding_signed_fixture`] with the target's `channel_ready` queued
