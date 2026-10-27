@@ -999,6 +999,22 @@ fn execute_create_funding_transaction_insufficient_funds() {
 }
 
 #[test]
+fn funding_signed_reply_matches_ldk_signature() {
+    // LDK computed this signature over the funding flow's commitment, so the
+    // derived reply matching it shows both implementations build the same
+    // commitment transaction.
+    let ldk_signature: Signature = "304402203dbf3dbf337b042a72576488c1fb019086089d8d790a47f652346cff2511b6e70220395fdf700cb82b0abfcfe8e0b7c822181f2ee72409c82c3ff8e04e36593662c7"
+        .parse()
+        .expect("valid DER signature");
+
+    let Message::FundingSigned(reply) = funding_signed_reply() else {
+        panic!("funding_signed_reply builds a funding_signed");
+    };
+
+    assert_eq!(reply.signature, ldk_signature);
+}
+
+#[test]
 fn execute_send_funding_created_and_recv_funding_signed() {
     // The acceptor replies with funding_signed carrying its signature over
     // the opener's commitment.
@@ -1154,7 +1170,14 @@ fn execute_recv_funding_signed_unknown_channel() {
 
     let err = Fixture::new()
         .queue(&Message::AcceptChannel(funded_accept_channel()))
-        .queue(&funding_signed_reply(channel_id))
+        .queue(&Message::FundingSigned(FundingSigned {
+            channel_id,
+            ..funding_signed_for(
+                &funded_open_channel().message,
+                &funded_accept_channel(),
+                funding_outpoint(),
+            )
+        }))
         .run_err(&fund_channel_program());
     let ExecuteError::Violation(Violation::InvalidFundingSigned(id, reason)) = &err else {
         panic!("unexpected error: {err:?}");
@@ -1214,7 +1237,7 @@ fn execute_recv_funding_signed_duplicate() {
     b.append(Operation::RecvFundingSigned, &[second.sent]);
 
     let err = recv_funding_signed_fixture()
-        .queue(&funding_signed_reply(channel_id))
+        .queue(&funding_signed_reply())
         .run_err(&b.build());
     let ExecuteError::Violation(Violation::InvalidFundingSigned(id, reason)) = &err else {
         panic!("unexpected error: {err:?}");
@@ -1728,7 +1751,7 @@ fn execute_recv_channel_ready_rejects_reused_target_static_pubkey() {
 
     let err = Fixture::new()
         .queue(&Message::AcceptChannel(accept_channel))
-        .queue(&funding_signed_reply(funding_channel_id()))
+        .queue(&funding_signed_reply())
         .queue(&channel_ready_reply(reused))
         .run_err(&recv_channel_ready_program(6));
 

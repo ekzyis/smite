@@ -1,7 +1,7 @@
 //! BOLT 3 commitment transaction construction and signing.
 
 use super::funding::build_funding_witness_script;
-use crate::bolt::Features;
+use crate::bolt::{AcceptChannel, Features, OpenChannel};
 
 use bitcoin::absolute::LockTime;
 use bitcoin::hashes::sha256::Hash as Sha256;
@@ -161,6 +161,54 @@ impl HolderIdentity {
 }
 
 impl ChannelConfig {
+    /// Returns the channel `open_channel` and `accept_channel` negotiate, funded at
+    /// `funding_outpoint`, with its initial commitments.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`CommitmentError`] of [`Self::new_initial_commitments`] if
+    /// the negotiated amounts cannot form the initial commitments.
+    pub fn from_negotiation(
+        open_channel: &OpenChannel,
+        accept_channel: &AcceptChannel,
+        funding_outpoint: OutPoint,
+    ) -> Result<(Self, ChannelCommitments), CommitmentError> {
+        let config = Self {
+            funding_outpoint,
+            funding_satoshis: open_channel.funding_satoshis,
+            channel_type: Features::from(
+                open_channel.tlvs.channel_type.clone().unwrap_or_default(),
+            ),
+            opener: ChannelPartyConfig {
+                funding_pubkey: open_channel.funding_pubkey,
+                payment_basepoint: open_channel.payment_basepoint,
+                revocation_basepoint: open_channel.revocation_basepoint,
+                delayed_payment_basepoint: open_channel.delayed_payment_basepoint,
+                htlc_basepoint: open_channel.htlc_basepoint,
+                dust_limit_satoshis: open_channel.dust_limit_satoshis,
+                to_self_delay: open_channel.to_self_delay,
+            },
+            acceptor: ChannelPartyConfig {
+                funding_pubkey: accept_channel.funding_pubkey,
+                payment_basepoint: accept_channel.payment_basepoint,
+                revocation_basepoint: accept_channel.revocation_basepoint,
+                delayed_payment_basepoint: accept_channel.delayed_payment_basepoint,
+                htlc_basepoint: accept_channel.htlc_basepoint,
+                dust_limit_satoshis: accept_channel.dust_limit_satoshis,
+                to_self_delay: accept_channel.to_self_delay,
+            },
+            minimum_depth: accept_channel.minimum_depth,
+        };
+        let commitments = config.new_initial_commitments(
+            open_channel.push_msat,
+            open_channel.feerate_per_kw,
+            open_channel.first_per_commitment_point,
+            accept_channel.first_per_commitment_point,
+        )?;
+
+        Ok((config, commitments))
+    }
+
     /// Returns the config for the given channel side.
     fn party(&self, side: Side) -> &ChannelPartyConfig {
         match side {
